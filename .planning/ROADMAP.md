@@ -34,8 +34,20 @@ Milestone v1.0 delivers a **mesh-only KITTI-360 baseline** judged by a **frozen,
   3. One `T_AB` transform module passes round-trip `< 1e-9`, `det(R) = +1`, `RᵀR = I` within `1e-6`, camera height 1.4–1.9 m, and `T_W_C0_rect` vs `cam0_to_world` within `1e-3`.
   4. LiDAR→image overlays align to `< 2 px` at 10–30 m on at least 3 frames (G1), with no raw-vs-rectified mixing.
   5. `decisions.md` pre-registers segment selection criteria, frame window, τ values, buckets, exclusions, and primary metric with a timestamp and hash before any reconstruction starts.
-**Plans**: TBD
-**Notes**: Package scaffolding (`src/hls/`, configs, test harness, `docs/frames.md`) is delivered here; it is infrastructure, not a mapped requirement. This phase is a hard stop if official calibration/poses cannot be obtained.
+**Plans:** 8 plans
+
+- [ ] 01-01-PLAN.md — Execution contract (container/data root/acquisition policy) and package scaffold
+- [ ] 01-02-PLAN.md — Dataset layout adapter, preflight checker, and fail-loud exit contract
+- [ ] 01-03-PLAN.md — `T_AB` frames/calibration module and `check-calib` artifacts
+- [ ] 01-04-PLAN.md — Protocol pre-registration (`decisions.md`, `protocol.yaml`, hash)
+- [ ] 01-05-PLAN.md — Minimal official subset acquisition and readiness manifest
+- [ ] 01-06-PLAN.md — LiDAR→image projection, overlays, and advisory edge score
+- [ ] 01-07-PLAN.md — Real-sequence G1 evidence: transforms, camera height, overlays
+- [ ] 01-08-PLAN.md — Human overlay sign-off and G1 gate decision
+
+**Wave structure:** Wave 1: 01-01 · Wave 2: 01-02 · Wave 3: 01-03, 01-04, 01-05, 01-06 · Wave 4: 01-07 · Wave 5: 01-08
+
+**Notes**: Package scaffolding (`src/hls/`, configs, test harness, `docs/frames.md`) is delivered here; it is infrastructure, not a mapped requirement. This phase is a hard stop if official calibration/poses cannot be obtained. The container runtime, dataset root, and image-reuse policy are decision checkpoints in 01-01 because `AGENTS.md` forbids inventing them.
 
 ### Phase 2: Data Foundation & Frozen GT Ray Set
 **Goal**: Users can generate, validate, and freeze the exact GT-defined ray set that every representation will be judged on, from motion-compensated per-frame LiDAR with dynamic and ego content removed.
@@ -121,7 +133,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7. Phase 4 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Preflight, Acquisition & Calibration Foundation | 0/— | Not started | - |
+| 1. Preflight, Acquisition & Calibration Foundation | 0/8 | Ready to execute | - |
 | 2. Data Foundation & Frozen GT Ray Set | 0/— | Not started | - |
 | 3. Evaluation Harness & Metrics Contract | 0/— | Not started | - |
 | 4. Mesh Reconstruction Route | 0/— | Not started | - |
