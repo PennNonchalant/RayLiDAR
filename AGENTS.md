@@ -45,6 +45,12 @@ upstream unless the user names it.
 - Do not fabricate values to unblock yourself. A recorded "unknown" plus a question is always
   better than a plausible invention.
 
+## 6. 回复语言
+
+- 所有面向用户的回复必须使用简体中文。
+- 代码、命令、文件路径、标识符、日志和引用原文保持原样，不强制翻译。
+- 除非用户明确要求其他语言，否则不要切换语言。
+
 ## Open items
 
 - [ ] Container image / name / run command — TBD

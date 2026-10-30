@@ -66,6 +66,7 @@ Produce a geometrically credible, quantitatively evaluated LiDAR simulation from
 - **Data disk:** `/data-20T` is the data disk. All datasets, preprocessed artifacts, checkpoints, run outputs, and result artifacts must live under `/data-20T`. Nothing large goes on the system disk.
 - **Parallel delegation:** Tasks that are parallelizable may be delegated to parallel subagents to reduce wall-clock time; tasks with shared files or ordering constraints stay sequential.
 - **No guessing:** Never guess unknown project information (paths, container details, dataset layout, hardware, upstream forks). Ask the user before executing.
+- **回复语言：** 所有面向用户的回复必须使用简体中文；代码、命令、文件路径、标识符和引用原文保持原样。
 
 ## Constraints
 

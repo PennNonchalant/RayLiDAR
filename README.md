@@ -16,6 +16,7 @@
 - **Data disk:** `/data-20T` — every dataset, preprocessed artifact, checkpoint, and run output lives under this path (see §6.2).
 - **Parallel subagents:** Delegate independent, parallelizable tasks to parallel subagents; keep file-conflicting or ordered work sequential.
 - **No guessing:** If project information is unknown, ask the user before executing. Never fabricate paths, container details, dataset layout, or hardware facts.
+- **回复语言：** 所有面向用户的回复使用简体中文；代码、命令、文件路径、标识符和引用原文保持原样。
 
 ---
 
