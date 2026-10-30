@@ -1,0 +1,245 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[margin=1.7cm,top=1.5cm,bottom=1.5cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\setCJKmainfont{Droid Sans Fallback}
+\setCJKsansfont{Droid Sans Fallback}
+\setCJKmonofont{Droid Sans Fallback}
+
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds,calc}
+\usepackage{titlesec}
+\usepackage{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{cblue}{HTML}{1F4E79}
+\definecolor{corange}{HTML}{B45F06}
+\definecolor{cgreen}{HTML}{38761D}
+\definecolor{cpurple}{HTML}{5B3C88}
+\definecolor{cgray}{HTML}{595959}
+
+\titleformat{\section}{\large\bfseries\color{cblue}}{\thesection}{0.5em}{}
+\titlespacing*{\section}{0pt}{7pt}{3pt}
+\titleformat{\subsection}{\normalsize\bfseries\color{corange}}{\thesubsection}{0.4em}{}
+\titlespacing*{\subsection}{0pt}{5pt}{2pt}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2.5pt}
+\setlength{\emergencystretch}{2.5em}
+\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,topsep=2pt,parsep=0pt}
+\renewcommand{\arraystretch}{1.15}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\begin{document}
+
+\begin{center}
+{\LARGE\bfseries\color{cblue} Hybrid Mesh--Gaussian LiDAR Simulation}\\[3pt]
+{\large GPU Programming Final Project \;/\; 方案 V2}\\[2pt]
+{\small\color{cgray} P1 双基线 $\rightarrow$ P2 路由级 hybrid + GPU 加速 $\rightarrow$ P3（可选）表示级 hybrid}
+\end{center}
+
+\vspace{-4pt}
+
+\begin{tcolorbox}[colback=orange!4,colframe=corange!55,boxrule=0.6pt,arc=2pt,left=4pt,right=4pt,top=2pt,bottom=2pt]
+\small\textbf{本版相对 V1 的变化：} V1 直接构建单一混合表示 $\mathcal{M}+\mathcal{G}_{res}$ 并融合渲染。V2 改为\textbf{分阶段路线}：先在一个 KITTI-360 场景上跑通 mesh-only 与 gaussian-only 两套基线并做 GT-ray 仿真（P1）；再用\textbf{逐 ray 路由}（adaptive ray dispatcher）在 mesh 与 gaussian 两套完整场景之间动态分派，并做 GPU 加速（P2）；若时间富余，才回到真正的混合表示并优化重建（P3）。这样每阶段都有独立可交付，风险可控。
+\end{tcolorbox}
+
+%=====================================================================
+\section{项目概览}
+
+\begin{tabularx}{\textwidth}{@{}p{2.4cm}Y@{}}
+\toprule
+\textbf{目标} & 用 RGB 重建室外静态场景，并从重建结果实时仿真 LiDAR 扫描；比较 mesh-only、gaussian-only 与 hybrid casting 三种路线在\textbf{保真度--速度}上的 Pareto 差异。\\
+\textbf{输入} & 多视角 RGB 图像、相机内外参与位姿；同轨迹真实 LiDAR 扫描（\emph{仅用于评测}，不参与重建）。\\
+\textbf{输出} & 沿 GT 射线方向求交得到的仿真点云 / range image，以及与 GT 的逐 ray 误差。\\
+\textbf{核心思路} & LiDAR 是 \textbf{surface-first} 传感器：平坦表面交给 mesh（精确、可 LOD、BVH 便宜），薄结构/非表面/高频残差交给 Gaussian。V2 先用\textbf{路由}近似这一分工，再决定是否升级为单一混合表示。\\
+\textbf{边界} & 只做静态、只做几何；动态物体用「选序列 + 语义 mask + 仅评测静态 GT」绕开；主评测距离 0--50\,m。\\
+\bottomrule
+\end{tabularx}
+
+\subsection{执行路线总览}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  font=\scriptsize,
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=8mm, text width=2.6cm, inner sep=2pt, fill=white},
+  io/.style={box, fill=blue!7, draw=blue!55!black},
+  p1/.style={box, fill=orange!9, draw=orange!65!black},
+  p2/.style={box, fill=green!9, draw=green!45!black},
+  p3/.style={box, fill=purple!8, draw=purple!50!black},
+  ar/.style={-{Latex[length=1.4mm]}, thick, draw=black!65},
+  grp/.style={draw=black!35, dashed, rounded corners=4pt, inner sep=5pt}
+]
+% ---------- P1 ----------
+\node[io]   (in)   at (0,3.0)   {RGB + poses\\+ calib};
+\node[p1]   (gs)   at (0,1.9)   {3DGS / 2DGS\\训练};
+\node[p1]   (mesh) at (-1.5,0.7){mesh-only\\TSDF+MC};
+\node[p1]   (gau)  at (1.5,0.7) {gaussian-only\\3DGS/2DGS};
+\node[p1]   (cast) at (0,-0.5)  {GT-ray cast\\(逐 ray BVH)};
+\draw[ar] (in)--(gs);
+\draw[ar] (gs)--(mesh); \draw[ar] (gs)--(gau);
+\draw[ar] (mesh)--(cast); \draw[ar] (gau)--(cast);
+\node[grp, fit=(in)(gs)(mesh)(gau)(cast),
+  label={[font=\scriptsize\bfseries,text=corange]above:P1 双基线（必做）}] {};
+
+% ---------- P2 ----------
+\node[p1] (base) at (5.4,3.0) {P1 基线 + GT rays};
+\node[p2] (disp) at (5.4,1.9) {adaptive dispatcher\\mesh-first + fallback};
+\node[p2] (gpu)  at (5.4,0.7) {GPU: 虚拟球面 tile / BVH\\+ 选择性 GS splat};
+\node[p2] (out2) at (5.4,-0.5){hybrid casting\\fallback--精度--FPS};
+\draw[ar] (base)--(disp); \draw[ar] (disp)--(gpu); \draw[ar] (gpu)--(out2);
+\node[grp, fit=(base)(disp)(gpu)(out2),
+  label={[font=\scriptsize\bfseries,text=cgreen]above:P2 路由级 hybrid + GPU（必做）}] {};
+
+% ---------- P3 ----------
+\node[p3] (hyb) at (10.2,2.2) {真混合表示\\$\mathcal{M}+\mathcal{G}_{res}$};
+\node[p3] (opt) at (10.2,1.0) {重建优化\\R1--R4};
+\node[p3] (cmp) at (10.2,-0.2){P2 vs P3\\对比};
+\draw[ar] (hyb)--(opt); \draw[ar] (opt)--(cmp);
+\node[grp, fit=(hyb)(opt)(cmp),
+  label={[font=\scriptsize\bfseries,text=cpurple]above:P3 表示级 hybrid（可选）}] {};
+\end{tikzpicture}
+\caption{V2 三阶段路线。P1/P2 为必做，P3 在时间富余时执行。P2 的「hybrid」是\textbf{逐 ray 分派两套完整场景}，并非单一混合表示；P3 才用真正的 $\mathcal{M}+\mathcal{G}_{res}$ 替换路由。}
+\end{figure}
+
+%=====================================================================
+\section{P1：单场景双基线 + GT-ray 仿真（不关注重建优化）}
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt,topsep=1pt]
+\item \textbf{选场景与预处理}：KITTI-360 一个低动态序列；用官方米制 pose/calib（不跑 COLMAP）；语义 mask 剔动态；剔除 ego 自身点；评测截断 0--50\,m，按 20\,m 分桶。
+\item \textbf{重建}：训练 \textbf{3DGS} 与 \textbf{2DGS} 各一份（同场景）。
+  \begin{itemize}
+  \item gaussian-only 基线 = 3DGS、2DGS 本身（两条曲线）。
+  \item mesh-only 基线 = 由 \textbf{2DGS depth $\rightarrow$ TSDF 融合 $\rightarrow$ Marching Cubes} 得 watertight mesh；共享 2DGS 训练。3DGS-derived mesh 仅作消融，避免重复训练。
+  \end{itemize}
+\item \textbf{GT-ray cast（主协议不变）}：$p_C=T_{CL}p_L$，$d=p_C/\|p_C\|$，$r_{gt}=\|p_C\|$，从相机原点沿 $d$ 求交；未命中记 $\infty$，计入 recall / miss-rate。
+  \textbf{后端先统一用逐 ray BVH}：mesh 用 Möller--Trumbore，2DGS 用 ray--disk 解析交，3DGS 用椭球解析或 proxy。
+\item \textbf{eval harness}：range MAE/RMSE/MedAE、CD(L1/L2)、F-score@5/20/50\,cm、precision/recall、miss、分桶、FPS。先 CPU 对拍，再上 GPU。
+\end{enumerate}
+
+\textbf{产出}：三条 baseline 曲线（mesh-only / 3DGS / 2DGS）+ 正确可复现的评测脚本。\\
+\textbf{验收}：三种 cast 都能复现合理的 GT 误差；mesh 与 gaussian 的误差差异符合预期（薄结构 gaussian 更好、平面 mesh 更好）。
+
+%=====================================================================
+\section{P2：naive hybrid casting（路由）+ GPU 加速}
+
+\subsection{定义与选择器}
+per-ray 选择「走 mesh 场景」还是「走 gaussian 场景」，采用 \textbf{mesh-first + 廉价 fallback}，\textbf{绝不两侧都算再挑}（否则付两份代价、无加速，退化为 ensemble）。
+
+\begin{tcolorbox}[colback=green!3,colframe=cgreen!55,boxrule=0.5pt,arc=2pt,left=4pt,right=4pt,top=2pt,bottom=2pt]
+\small\textbf{廉价线索（严禁使用 GT）：} mesh 未命中（洞）、TSDF/三角置信度低、掠射角 $|n\cdot d|$ 小、深度/法向不连续、薄结构语义（杆/线/植被）、距离超出 LOD 可信范围。
+\end{tcolorbox}
+
+\textbf{两种 router 都实现并对比，择优采用：}
+\begin{itemize}
+\item \textbf{H（启发式）}：上述线索 + 可调阈值；无训练、可解释、作为主线。
+\item \textbf{L（学习式）}：小 MLP，特征同 H 再加局部深度方差；\textbf{用一条序列的 GT 训练、另一条序列评测}以避免泄漏；跨序列泛化差则弃用。
+\end{itemize}
+
+\subsection{评测与 GPU 优化}
+\textbf{评测}：相对两基线的精度、\textbf{fallback rate}、\textbf{oracle gap}（GT 逐 ray 取最优作上界，仅分析用）、分派耗时占比、mesh 服务 ray 占比。
+
+\textbf{GPU（V1 的 I 类）：}
+\begin{itemize}
+\item \textbf{I5} 逐 ray BVH 遍历（Möller--Trumbore）：基线正确性与兜底。
+\item 任意 GT 射线非规则：把射线与三角形装箱到\textbf{虚拟球面角度 tile}（如 64$\times$2650），再做 \textbf{I3} tile binning + shared-memory 深度缓冲；\textbf{I1} 的 range-image 光栅化在此角度域上实现。
+\item \textbf{I2} 重解释为「同一 tile 内 mesh z-buffer + \textbf{仅对 fallback ray} 做 GS splat 的选择性融合」，而非全量 GS splat。
+\item \textbf{I4} 占用栅格 / DDA 空域跳过；\textbf{I7} Morton 重排 ray/tile；\textbf{E1} GPU CD / F-score / recall。
+\item 规则 beam-pattern 次协议可选（用于展示原生 range-image 光栅优势），主协议仍为 GT rays。
+\end{itemize}
+
+\textbf{产出}：fallback--精度--FPS 的 Pareto；H vs L router 对比；融合/分派耗时拆解；oracle gap 分析。\\
+\textbf{验收}：相对 gaussian-only 有明确加速且精度不显著退化（目标 FPS 2--4$\times$、CD 退化 $<$5--10\%，以实测为准）；相对 mesh-only 薄结构 recall 明显提升。
+
+%=====================================================================
+\section{P3（可选）：真混合表示 + 重建优化}
+
+用单一 $\mathcal{M}+\mathcal{G}_{res}$ 场景\textbf{替换 P2 的路由}：残差驱动 Gaussian 放置（R3）、2DGS 几何（R1）、depth prior（R2）、Mesh LOD（R4）。
+\textbf{对比命题}：P2 routed vs P3 true-hybrid：精度、\#primitives、显存、速度、fallback 消失后的收益。
+\textbf{定位}：P2 是路由基线，P3 才是表示级 hybrid；若时间不足，P2 自成完整成果。
+
+%=====================================================================
+\section{技术决策与指标}
+
+\begin{center}\small
+\begin{tabularx}{\textwidth}{@{}p{3.0cm}Y@{}}
+\toprule
+\textbf{项} & \textbf{决定}\\
+\midrule
+Router & 启发式 H 与学习式 L 都做，按验证集择优，另一条作消融\\
+Gaussian 基线 & 3DGS 与 2DGS 都跑\\
+Mesh 来源 & 2DGS depth $\rightarrow$ TSDF $\rightarrow$ Marching Cubes（共享训练；3DGS-derived 仅消融）\\
+求交后端 & 先逐 ray BVH；GPU 优化阶段加虚拟球面 tile；range-image 光栅化视需要再上\\
+评测协议 & GT-defined rays（不变）\\
+场景规模 & 单场景先行，跑通后再扩展序列/数据集\\
+术语 & adaptive \textbf{ray dispatcher}（非射线方向自适应）\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{指标}：range MAE/RMSE/MedAE（仅命中）；CD(L1/L2)；F-score@5/20/50\,cm；precision/recall；miss rate；0--20/20--40/40--60\,m 分桶；FPS、单帧延迟、rays/s、峰值显存、\#primitives。P2 额外报 fallback rate 与 oracle gap；P3 额外报残留预算扫描（5/10/20\%）。
+
+%=====================================================================
+\section{计划（8--10 周）}
+
+\begin{center}\scriptsize
+\begin{tabularx}{\textwidth}{@{}c Y Y@{}}
+\toprule
+\textbf{周} & \textbf{任务} & \textbf{里程碑}\\
+\midrule
+1 & KITTI-360 预处理 + GT-ray 协议 + eval harness（先 CPU） & 评测管线跑通\\
+2 & 3DGS / 2DGS 训练 + TSDF mesh & 三类表示就绪\\
+3 & 逐 ray BVH cast（mesh / 2DGS / 3DGS） & 三条 baseline 曲线\\
+4--5 & 启发式 router + 虚拟球面 tile（I3/I5） & fallback--FPS 初版\\
+6 & 选择性融合（I2）+ I4/I7 + 学习式 router & Pareto + H/L 对比\\
+7 & 实验矩阵 + 消融 + 三张必交图 & 报告主体\\
+8--10 & （可选）P3 真 hybrid + R1--R4、Waymo 泛化、demo & 加分项\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{必交三张图}：(1) 精度--FPS Pareto（mesh / 3DGS / 2DGS / hybrid）；(2) 推理耗时拆解（ray gen / mesh / GS / 分派 / resolve，融合前后）；(3) 分距离桶 range RMSE + recall。
+\textbf{降级预案}：若仅 8 周，砍学习式 router 与 I4/I7 进阶版；P3 只做概念验证 + 一组对比。
+
+%=====================================================================
+\section{风险与预期}
+
+\begin{center}\scriptsize
+\begin{tabularx}{\textwidth}{@{}p{4.2cm}Y@{}}
+\toprule
+\textbf{风险} & \textbf{对策}\\
+\midrule
+路由无加速（两侧都算） & 强制 mesh-first 廉价 fallback；报告 fallback rate；oracle gap 仅作分析\\
+任意射线 vs range-image 不兼容 & 先逐 ray BVH；再做角度域装箱；规则 beam 次协议可选\\
+两套表示双倍显存 & P2 报告显存；P3 合并为单一 hybrid 解决\\
+学习式 router 用 GT 泄漏 & 跨序列训练/评测；泛化差则弃用，保留启发式\\
+3DGS ray 求交慢/不准 & 几何主基线用 2DGS；3DGS 作对照与消融\\
+RGB 深度噪声 / TSDF 空洞 & 2DGS depth、depth prior、confidence 加权；必要时 residual 填洞（P3）\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{预期结果}：相对 gaussian-only，hybrid casting FPS 提升 2--4$\times$、CD 退化控制在 5--10\% 以内；相对 mesh-only，薄结构 recall 明显提升；选择性融合相对串行分派再提升 1.3--2$\times$；P3 真 hybrid 进一步降低图元数与显存，并给出 P2/P3 的精度--效率对比。
+
+\vspace{3pt}
+\begin{sloppypar}
+{\scriptsize
+\textbf{代表性参考：}
+LiDAR-GS (arXiv:2410.05111); GS-LiDAR (ICLR'25, arXiv:2501.13971); LiDAR-RT (CVPR'25, arXiv:2412.15199);
+SplatAD (arXiv:2411.16816); SimULi (ICLR'26, arXiv:2510.12901); LiDAR-GS++ (AAAI'26, arXiv:2511.12304);
+FGGS-LiDAR (arXiv:2509.17390); Hybrid Mesh-Gaussian (IJCAI'25, arXiv:2506.06988); OMeGa (arXiv:2509.24308);
+CityGo (ACM MM'25, arXiv:2505.21041); NFL (ICCV'23, arXiv:2305.01643); LiDARsim (CVPR'20, arXiv:2006.09348);
+2DGS (arXiv:2403.17888); GOF (arXiv:2404.10772); 3DGS (arXiv:2308.04079).
+}
+\end{sloppypar}
+
+\end{document}

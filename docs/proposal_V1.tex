@@ -1,0 +1,298 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[margin=1.7cm,top=1.5cm,bottom=1.5cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\setCJKmainfont{Droid Sans Fallback}
+\setCJKsansfont{Droid Sans Fallback}
+\setCJKmonofont{Droid Sans Fallback}
+
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds,calc}
+\usepackage{titlesec}
+\usepackage{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{cblue}{HTML}{1F4E79}
+\definecolor{corange}{HTML}{B45F06}
+\definecolor{cgreen}{HTML}{38761D}
+\definecolor{cgray}{HTML}{595959}
+
+\titleformat{\section}{\large\bfseries\color{cblue}}{\thesection}{0.5em}{}
+\titlespacing*{\section}{0pt}{7pt}{3pt}
+\titleformat{\subsection}{\normalsize\bfseries\color{corange}}{\thesubsection}{0.4em}{}
+\titlespacing*{\subsection}{0pt}{5pt}{2pt}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2.5pt}
+\setlength{\emergencystretch}{2.5em}
+\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,topsep=2pt,parsep=0pt}
+\renewcommand{\arraystretch}{1.15}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\begin{document}
+
+\begin{center}
+{\LARGE\bfseries\color{cblue} Hybrid Mesh--Gaussian LiDAR Simulation}\\[3pt]
+{\large GPU Programming Final Project \;/\; 方案 V1（原始）}\\[2pt]
+{\small\color{cgray} RGB 重建 $\rightarrow$ mesh / Gaussian / hybrid $\rightarrow$ 射线求交生成 LiDAR 点 $\rightarrow$ 与 GT 对比}
+\end{center}
+
+\vspace{-4pt}
+
+%=====================================================================
+\section{项目概览}
+
+\begin{tabularx}{\textwidth}{@{}p{2.4cm}Y@{}}
+\toprule
+\textbf{目标} & 用 RGB 重建室外静态场景，并从重建结果实时仿真 LiDAR 扫描；比较 mesh-only、Gaussian-only 与 hybrid 三种表示在\textbf{保真度--速度}上的 Pareto 差异。\\
+\textbf{输入} & 多视角 RGB 图像、相机内外参与位姿；同轨迹真实 LiDAR 扫描（\emph{仅用于评测}，不参与重建）。\\
+\textbf{输出} & 沿 LiDAR 光束方向求交得到的仿真点云 / range image，以及与 GT 的逐 ray 误差。\\
+\textbf{核心思路} & LiDAR 是 \textbf{surface-first} 传感器：几何交给 mesh（精确、可 LOD、BVH 便宜），薄结构/非表面/高频残差交给少量 2D Gaussian。图元数降一个数量级 $\Rightarrow$ 推理显著加速。\\
+\textbf{边界} & 只做静态、只做几何；动态物体用「选序列 + 语义 mask + 仅评测静态 GT」绕开；主评测距离 0--50\,m。\\
+\bottomrule
+\end{tabularx}
+
+\begin{tcolorbox}[colback=blue!4,colframe=cblue!60,boxrule=0.6pt,arc=2pt,left=4pt,right=4pt,top=2pt,bottom=2pt]
+\textbf{为什么 hybrid 有优势：} 现有 LiDAR GS 方法（LiDAR-GS / GS-LiDAR / LiDAR-RT）用 Gaussian 表达整个场景，包含大量平坦表面；LiDAR-RT 还为每个 Gaussian 建代理 BVH。相机域的 Hybrid Mesh-Gaussian (IJCAI'25) 已证明：把平坦高纹理区换成纹理 mesh，Gaussian 从 1.667M 降到 0.295M，FPS 从 122 升到 446，画质不降。LiDAR 域尚无同类工作。
+\end{tcolorbox}
+
+\subsection{评测协议（GT-defined rays）}
+
+LiDAR 与相机光心不重合（外参平移 0.1--0.8\,m），直接沿用固定 beam pattern 会产生系统视差。主协议为：取 GT 点 $p_L$，变换到相机系 $p_C=T_{CL}p_L$，令方向 $d=p_C/\|p_C\|$、$r_{gt}=\|p_C\|$，从相机原点沿 $d$ 求交得到 $r_{pred}$；误差 $|r_{pred}-r_{gt}|$，再映射回 LiDAR 系计算 CD / F-score。
+未命中记为 \textbf{miss}（不计入 range 误差，但计入 recall / miss-rate）。ray 数 $=$ GT 点数（$\sim10^5$/帧），天然并行。
+
+%=====================================================================
+\section{测量指标}
+
+\begin{tabularx}{\textwidth}{@{}p{1.8cm}p{4.7cm}Y@{}}
+\toprule
+\textbf{类别} & \textbf{指标} & \textbf{说明}\\
+\midrule
+Range & MAE / RMSE / MedAE & 逐 ray 的 $|r_{pred}-r_{gt}|$，仅统计命中\\
+点云 & Chamfer Distance & 双向最近邻均值（L1 / L2）\\
+点云 & F-score（5/20/50\,cm） & 主表用 20\,cm，5\,cm 为严格项\\
+点云 & Precision / Recall & Recall 反映 mesh 洞与薄结构丢失\\
+覆盖 & Miss rate & 未命中 ray 占比\\
+分桶 & 0--20 / 20--40 / 40--60\,m & 防止远距离噪声主导均值\\
+效率 & FPS、单帧延迟、rays/s、峰值显存、\#primitives & 固定 64$\times$2650 等分辨率报告\\
+\bottomrule
+\end{tabularx}
+
+%=====================================================================
+\section{Pipeline}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  font=\scriptsize,
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=8.5mm, text width=2.35cm, inner sep=2pt, fill=white},
+  io/.style={box, fill=blue!7, draw=blue!55!black},
+  proc/.style={box, fill=orange!9, draw=orange!65!black},
+  gpu/.style={box, fill=green!9, draw=green!45!black},
+  ar/.style={-{Latex[length=1.5mm]}, thick, draw=black!65},
+  lab/.style={font=\tiny, text=black!60},
+  grp/.style={draw=black!35, dashed, rounded corners=4pt, inner sep=5pt}
+]
+
+% ---------- Panel A: reconstruction ----------
+\node[io]  (rgb)  at (0,3.0)   {多视角 RGB\\+ 位姿 / 标定};
+\node[proc](gs)   at (3.2,3.0) {3DGS / 2DGS\\训练};
+\node[proc](tsdf) at (6.4,3.0) {Depth 渲染\\+ TSDF 融合};
+\node[proc](mesh) at (9.6,3.0) {Mesh + LOD};
+\node[proc](res)  at (9.6,1.55){残差 2D Gaussians\\（逐 ray 误差驱动）};
+\node[io]  (hyb)  at (12.9,2.28){Hybrid 场景\\$\mathcal{M}+\mathcal{G}_{res}$};
+
+\draw[ar] (rgb) -- (gs);
+\draw[ar] (gs) -- (tsdf);
+\draw[ar] (tsdf) -- (mesh);
+\draw[ar] (tsdf.south) -- node[lab,right]{残差图} (res.north);
+\draw[ar] (mesh) -- (hyb);
+\draw[ar] (res.east) -- (hyb.south west);
+
+\begin{scope}[on background layer]
+\node[grp, fit=(rgb)(gs)(tsdf)(mesh)(res)(hyb), label={[font=\scriptsize\bfseries,text=cblue]above:重建（离线，每场景一次）}] {};
+\end{scope}
+
+% ---------- Panel B: inference ----------
+\node[io]  (hyb2)  at (0,-0.75)  {Hybrid 场景\\（同上）};
+\node[io]  (ray)   at (0,-2.25)  {GT 点 $\rightarrow$\\相机系射线 $(d,r_{gt})$};
+\node[gpu] (raster)at (3.5,-1.5) {球面 range 光栅\\mesh z-buffer};
+\node[gpu] (splat) at (6.7,-1.5) {残差 GS splat\\（同一 tile）};
+\node[proc](pts)   at (9.9,-1.5) {Range $\rightarrow$\\点云};
+\node[io]  (ev)    at (13.1,-1.5){与 GT 比较\\CD / F / RMSE};
+
+\draw[ar] (hyb2) -- (raster);
+\draw[ar] (ray) -- (raster);
+\draw[ar] (raster) -- (splat);
+\draw[ar] (splat) -- (pts);
+\draw[ar] (pts) -- (ev);
+
+\begin{scope}[on background layer]
+\node[grp, fit=(hyb2)(ray)(raster)(splat)(pts)(ev), label={[font=\scriptsize\bfseries,text=cgreen]below:推理（每帧 / 每扫描）}] {};
+\end{scope}
+
+\end{tikzpicture}
+\caption{总体 pipeline。重建阶段把 RGB 变成 hybrid 场景；推理阶段用 GT 定义射线，先在球面 range image 上光栅化 mesh，再在同一 tile 内 splat 残差 Gaussian，最后解析为点云并与 GT 比较。}
+\end{figure}
+
+\subsection{重建部分（RGB 到 hybrid）}
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt,topsep=1pt]
+\item \textbf{3DGS / 2DGS 训练}：用 gsplat 基线；2DGS/surfel 的法向更准，利于后续提 mesh。
+\item \textbf{Depth $\rightarrow$ TSDF $\rightarrow$ Mesh}：训练视角渲 depth，TSDF 融合后 Marching Cubes 得 watertight mesh；去噪、decimate、Laplacian 平滑。
+\item \textbf{Mesh LOD}：0--50\,m 用 5\,cm；50--120\,m 中分辨率；$>$120\,m 粗化或 impostor。
+\item \textbf{残差 Gaussian}：逐 ray 计算 mesh-only 误差 $e(r)$，在 $e(r)>\tau$ 或语义为植被/杆/线的位置生成 2DGS；冻结 mesh，只优化 $\mathcal{G}_{res}$，预算为全量 GS 的 5--20\%。
+\item \textbf{（可选）} transmittance-aware 联合微调，平衡 mesh 与 Gaussian 的贡献。
+\end{enumerate}
+
+\subsection{推理部分（hybrid 生成 LiDAR 点）}
+\begin{enumerate}[leftmargin=1.4em,itemsep=1pt,topsep=1pt]
+\item \textbf{Ray 生成}：每帧由 GT 点生成 $(d,r_{gt})$，无需 beam pattern；次协议可换成 LiDAR 原点 + 完整 beam pattern 以评测 coverage。
+\item \textbf{Mesh 球面光栅化}：三角形按球面 tile binning，shared-memory z-buffer，用 \texttt{atomicMin} 打包 depth 与 tri\_id。
+\item \textbf{残差 GS splat}：同一 tile 内做深度测试与 alpha 合成，处理薄结构、部分遮挡和二次回波。
+\item \textbf{Resolve}：每像素得到 $r_{pred}$，映射回 LiDAR 系得到点云。
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  font=\scriptsize,
+  b/.style={draw, rounded corners=2pt, align=center, minimum height=7mm, text width=4.2cm, inner sep=2pt, fill=white},
+  h/.style={font=\small\bfseries},
+  ar/.style={-{Latex[length=1.4mm]}, thick, draw=black!65}
+]
+\node[h,text=cgreen] at (0,0.9) {A. 球面 range 光栅（主线）};
+\node[b,fill=green!8] (a1) at (0,0.15) {三角形 $\rightarrow$ 球面 tile binning};
+\node[b,fill=green!8] (a2) at (0,-0.65){shared-mem z-buffer（atomicMin）};
+\node[b,fill=green!8] (a3) at (0,-1.45){残差 GS splat + 逐像素 resolve};
+\draw[ar] (a1) -- (a2); \draw[ar] (a2) -- (a3);
+\node[font=\tiny,text=black!60] at (0,-2.05) {成本 $O(HW+N_{g,vis})$，与场景面积无关};
+
+\node[h,text=corange] at (5.6,0.9) {B. BVH 光线追踪（对照）};
+\node[b,fill=orange!8] (b1) at (5.6,0.15) {LBVH 构建（Morton + radix sort）};
+\node[b,fill=orange!8] (b2) at (5.6,-0.65){逐线程遍历 + Möller--Trumbore};
+\node[b,fill=orange!8] (b3) at (5.6,-1.45){沿 ray 合成残差 GS / 二次回波};
+\draw[ar] (b1) -- (b2); \draw[ar] (b2) -- (b3);
+\node[font=\tiny,text=black!60] at (5.6,-2.05) {成本 $O(N_{ray}\log N_{tri})$，支持任意传感器配置};
+\end{tikzpicture}
+\caption{两种推理后端。主线用球面 range-image 光栅化：LiDAR 每帧仅 $\sim$0.17M ray，瓶颈是每条 ray 的图元遍历而非 ray 数，光栅化 + tile 融合更省。BVH 后端作为对照与灵活性兜底。}
+\end{figure}
+
+\subsection{复杂度}
+
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+LiDAR-GS / SplatAD & $O(HW)+O(N_{gauss,vis})$，$N_{gauss}\sim10^6$--$10^7$\\
+LiDAR-RT & $O(N_{ray}\log N_{proxy})$，$N_{proxy}\sim N_{gauss}$\\
+\textbf{Hybrid (Ours)} & $O(HW)+O(N_{g,res,vis})$，$N_{g,res}\sim10^5$，$N_{tri}\sim10^5$--$10^6$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%=====================================================================
+\section{待实现的优化任务（高性价比）}
+
+\begin{center}\scriptsize
+\begin{tabularx}{\textwidth}{@{}c c Y c c l@{}}
+\toprule
+\textbf{ID} & \textbf{部分} & \textbf{任务} & \textbf{难度} & \textbf{价值} & \textbf{参考}\\
+\midrule
+I1 & 推理 & 球面 range-image mesh 光栅化（z-buffer） & 2 & 5 & LiDAR-GS, GS-LiDAR\\
+I2 & 推理 & 单 kernel 融合 mesh z-buffer + GS splat & 4 & 5 & Hybrid Mesh-Gaussian, CityGo\\
+I3 & 推理 & Tile binning + shared-memory 深度缓冲 & 3 & 4 & 3DGS rasterizer\\
+I4 & 推理 & 占用栅格 DDA 空域跳过 & 2 & 3 & 经典\\
+I5 & 推理 & 逐线程 LBVH 遍历（Möller--Trumbore） & 2 & 3 & LiDAR-RT（对照）\\
+I7 & 推理 & Morton 重排 ray / tile 排序 & 3 & 3 & 经典\\
+I10 & 推理 & 解析 no-return 预测（加分） & 1 & 3 & NFL, LiDARsim\\
+E1 & 评测 & GPU CD / F-score / recall（栅格哈希） & 2 & 4 & 经典\\
+R1 & 重建 & 2DGS / surfel 替代 3DGS 提升几何 & 2 & 4 & 2DGS, GOF\\
+R2 & 重建 & 单目深度 / 法向先验正则 & 2 & 4 & Depth Anything V2\\
+R3 & 重建 & 残差驱动 Gaussian 增密/剪枝 + 预算 & 3 & 5 & Hybrid Mesh-Gaussian, CityGo\\
+R4 & 重建 & Mesh LOD + 自适应细分 & 3 & 4 & ---\\
+R7 & 重建 & 混合精度 / fused optimizer & 2 & 2 & ---\\
+\midrule
+\multicolumn{6}{@{}l@{}}{\color{black!55}不做：可微 mesh 联合优化、扩散先验补洞、动态 scene graph、BRDF 反演。}\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent\textbf{投入建议}：I1$\rightarrow$I3$\rightarrow$I2$\rightarrow$I4$\rightarrow$E1 占 60--70\%；R1/R2$\rightarrow$R3$\rightarrow$R4 占 20--30\%；I10 等加分项占 10\%。
+
+%=====================================================================
+\section{公开数据集}
+
+\begin{center}\scriptsize
+\begin{tabularx}{\textwidth}{@{}l Y c c@{}}
+\toprule
+\textbf{数据集} & \textbf{包含数据} & \textbf{动态} & \textbf{推荐}\\
+\midrule
+\textbf{KITTI-360} & 4 针孔 + 2 鱼眼；HDL-64E；米制位姿；2D/3D 语义 & 中（可筛） & ★★★★★\\
+\textbf{Waymo Open} & 5 相机；64/32 线；2D/3D 标注 & 高 & ★★★☆\\
+\textbf{Boreas} & 6 相机；128 线；重复路线/四季 & 低--中 & ★★★★\\
+nuScenes & 6 相机；32 线；2D/3D 标注 & 高 & ★★★\\
+Argoverse 2 & 7 相机；2$\times$32 线；标注 & 高 & ★★★\\
+Newer College & 手持；3D LiDAR；相机覆盖稀疏 & 低 & ★★★\\
+ZOD / M2DGR & 单/多相机 + LiDAR；校园/道路 & 中/低 & ★★\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{主推 KITTI-360}：位姿为米制，免 COLMAP / 免 Umeyama；4 相机 + 64 线；有语义可做动态 mask；且 LiDAR-GS / GS-LiDAR 均使用该数据集，baseline 可直接对标。
+\textbf{动态处理}：选低动态序列 + 语义 mask 剔出 loss + 仅评测静态 GT + ego 自身点剔除 + 0--50\,m 截断。
+
+%=====================================================================
+\section{实现顺序与计划（8--10 周）}
+
+\begin{center}\scriptsize
+\begin{tabularx}{\textwidth}{@{}c Y Y@{}}
+\toprule
+\textbf{周} & \textbf{任务} & \textbf{里程碑}\\
+\midrule
+1 & KITTI-360 预处理、GT-ray 协议、评测脚本 & eval harness 跑通\\
+2 & 3DGS 基线 + TSDF mesh-only 基线 & 两条 baseline 曲线\\
+3--4 & I1 + I3：球面 mesh 光栅化 & mesh 渲染正确性与 FPS\\
+5 & R1/R2 + R3：几何改善 + 残差 Gaussian & hybrid CD 提升\\
+6 & I2：融合 kernel & 融合 vs 串行加速比\\
+7 & I4 + I7：占用栅格、Morton 重排 & 再提升 1.2--2$\times$\\
+8 & 实验矩阵 + Pareto + 消融 & 报告主体\\
+9--10 & 可选：I10、Waymo 泛化、demo & 加分项\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{必交三张图}：(1) CD--FPS Pareto（mesh / GS / hybrid）；(2) 推理耗时拆解（ray gen / mesh / GS / resolve，融合前后）；(3) 分距离桶 range RMSE + recall。
+\textbf{降级预案}：若仅 8 周，砍 I5/I7 的进阶版与 I10，R5/R6 只做到「可用」。
+
+\vspace{2pt}
+{\scriptsize\color{cgray}
+\textbf{风险}：RGB 深度噪声与 TSDF 空洞 $\rightarrow$ 2DGS、depth prior、confidence 加权、残差填洞；球面三角形光栅化误差 $\rightarrow$ range-space 裁剪，退化时回落 BVH；远处不可靠 $\rightarrow$ 0--50\,m 主评测并分桶；公平性 $\rightarrow$ 固定 ray 集合、GT、分辨率与硬件。}
+
+\subsection*{预期结果与关键取舍}
+\begin{itemize}
+\item 相对 Gaussian-only：FPS 提升 2--4$\times$，CD 退化控制在 5--10\% 以内。
+\item 相对 mesh-only：植被、杆件、栏杆等薄结构区域的 recall 明显提升。
+\item 融合 kernel 相对串行版本：1.3--2$\times$；LOD + 占用栅格再提升 1.2--2$\times$。
+\item 取舍：不做动态物体与 intensity 物理建模，把复杂度集中在推理侧 CUDA 与 hybrid 表示上。
+\end{itemize}
+
+\vspace{3pt}
+\begin{sloppypar}
+{\scriptsize
+\textbf{代表性参考：}
+LiDAR-GS (arXiv:2410.05111); GS-LiDAR (ICLR'25, arXiv:2501.13971); LiDAR-RT (CVPR'25, arXiv:2412.15199);
+SplatAD (arXiv:2411.16816); SimULi (ICLR'26, arXiv:2510.12901); LiDAR-GS++ (AAAI'26, arXiv:2511.12304);
+FGGS-LiDAR (arXiv:2509.17390); Hybrid Mesh-Gaussian (IJCAI'25, arXiv:2506.06988); OMeGa (arXiv:2509.24308);
+CityGo (ACM MM'25, arXiv:2505.21041); NFL (ICCV'23, arXiv:2305.01643); LiDARsim (CVPR'20, arXiv:2006.09348);
+2DGS (arXiv:2403.17888); GOF (arXiv:2404.10772); 3DGS (arXiv:2308.04079).
+}
+\end{sloppypar}
+
+\end{document}
