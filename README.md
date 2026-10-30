@@ -1,1 +1,44 @@
 # RayLiDAR
+
+RayLiDAR explores GPU-accelerated LiDAR simulation using adaptive hybrid mesh and 3D Gaussian scene representations. The project aims to reduce simulation latency while preserving scan accuracy, with validation against KITTI-360. UE5 and Cesium support scene preparation and final visualization.
+
+## Toolchain
+
+| Area | Choice |
+| --- | --- |
+| Language | C++20; Windows/MSVC first, with Linux portability |
+| GPU API | Vulkan 1.4, Vulkan-Hpp `vk::raii`, and VMA |
+| Hardware RT | Compute shaders with `VK_KHR_ray_query` and BLAS/TLAS |
+| Viewer | Dynamic rendering, GLFW, and Dear ImGui |
+| Shaders | Slang compiled to SPIR-V; `shader-slang` managed through vcpkg |
+| Build | CMake, Ninja, and CMake Presets |
+| Dependencies | vcpkg Manifest Mode primarily; FetchContent as a fallback; Git submodules only for exceptional cases |
+
+## Build Pipeline
+
+```text
+CMake Presets + vcpkg manifest
+  ├── C++20 sources -> raylidar.dll + CLI/viewer executables
+  └── Slang sources -> slangc -> SPIR-V shader assets
+```
+
+CMake coordinates dependency resolution, shader compilation, and application builds. Dependency revisions are pinned through the vcpkg baseline. Machine-specific settings belong in an untracked `CMakeUserPresets.json`.
+
+## Architecture
+
+- **raylidar:** Shared simulation library containing GPU resources, scene and sensor data, scanning algorithms, and timing. Mesh ray queries form the initial baseline; Gaussian and hybrid paths follow.
+- **CLI:** Headless scanning, batch experiments, point-cloud export, and benchmarking.
+- **Viewer:** Interactive scene and scan inspection, sensor controls, and performance feedback. It shares simulation code and GPU results with the library.
+
+```text
+apps/                 CLI and viewer entry points
+include/raylidar/     Public library interfaces
+src/                 Simulation library and viewer rendering modules
+shaders/             Slang modules and entry points
+cmake/               Build and shader compilation helpers
+configs/             Sensor, scene, and experiment configurations
+tests/               CPU and GPU validation
+tools/               Dataset preparation and offline evaluation
+```
+
+The simulator exchanges scene assets, sensor trajectories, and scan outputs with the UE5/Cesium workflow through files.
