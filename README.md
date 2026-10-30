@@ -61,7 +61,8 @@ From an **x64 VS Developer PowerShell** at the repository root:
 $env:VCPKG_ROOT = "C:/path/to/vcpkg"
 cmake --preset windows-debug
 cmake --build --preset windows-debug
+.\build\windows-debug\raylidar_cli.exe --version
 ctest --preset windows-debug
 ```
 
-Executables are written to `build/windows-debug/`; CTest runs the configured tests. Use `windows-release` for an optimized build. In Visual Studio, open the repository folder, select a preset and executable target, then build and run.
+The `raylidar` shared library and `raylidar_cli` targets produce `raylidar.dll` and `raylidar_cli.exe` together in `build/windows-debug/`. The CLI currently supports `--help` and `--version`; CTest runs the configured tests. Use `windows-release` for an optimized build. In Visual Studio, open the repository folder, select a preset and executable target, then build and run.
