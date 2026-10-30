@@ -31,14 +31,15 @@ CMake coordinates dependency resolution, shader compilation, and application bui
 - **Viewer:** Interactive scene and scan inspection, sensor controls, and performance feedback. It shares simulation code and GPU results with the library.
 
 ```text
-apps/                 CLI and viewer entry points
-include/raylidar/     Public library interfaces
-src/                 Simulation library and viewer rendering modules
-shaders/             Slang modules and entry points
-cmake/               Build and shader compilation helpers
-configs/             Sensor, scene, and experiment configurations
-tests/               CPU and GPU validation
-tools/               Dataset preparation and offline evaluation
+apps/
+    cli/                # Headless scans, export, and benchmarks
+    viewer/             # Lightweight visualization and debugging
+include/raylidar/       # Public library API
+src/
+    vulkan/             # Device, buffers, and acceleration structures
+    simulation/         # Scene, sensor, and tracing implementation
+shaders/                # Slang shaders and shared modules
+cmake/                  # Build helpers
 ```
 
 The simulator exchanges scene assets, sensor trajectories, and scan outputs with the UE5/Cesium workflow through files.
