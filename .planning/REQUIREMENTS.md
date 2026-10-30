@@ -118,13 +118,63 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| — | — | Pending |
+| DATA-01 | Phase 1 | Pending |
+| DATA-02 | Phase 1 | Pending |
+| DATA-03 | Phase 2 | Pending |
+| DATA-04 | Phase 1 | Pending |
+| DATA-05 | Phase 2 | Pending |
+| DATA-06 | Phase 2 | Pending |
+| DATA-07 | Phase 2 | Pending |
+| DATA-08 | Phase 2 | Pending |
+| DATA-09 | Phase 1 | Pending |
+| RAY-01 | Phase 2 | Pending |
+| RAY-02 | Phase 2 | Pending |
+| RAY-03 | Phase 2 | Pending |
+| RAY-04 | Phase 2 | Pending |
+| RAY-05 | Phase 2 | Pending |
+| RAY-06 | Phase 2 | Pending |
+| RECON-01 | Phase 4 | Pending |
+| RECON-02 | Phase 4 | Pending |
+| RECON-03 | Phase 4 | Pending |
+| RECON-04 | Phase 4 | Pending |
+| RECON-05 | Phase 4 | Pending |
+| RECON-06 | Phase 4 | Pending |
+| CAST-01 | Phase 5 | Pending |
+| CAST-02 | Phase 5 | Pending |
+| CAST-03 | Phase 5 | Pending |
+| CAST-04 | Phase 5 | Pending |
+| CAST-05 | Phase 5 | Pending |
+| CAST-06 | Phase 5 | Pending |
+| EVAL-01 | Phase 3 | Pending |
+| EVAL-02 | Phase 3 | Pending |
+| EVAL-03 | Phase 3 | Pending |
+| EVAL-04 | Phase 3 | Pending |
+| EVAL-05 | Phase 3 | Pending |
+| EVAL-06 | Phase 3 | Pending |
+| EVAL-07 | Phase 3 | Pending |
+| EVAL-08 | Phase 3 | Pending |
+| EVAL-09 | Phase 6 | Pending |
+| EVAL-10 | Phase 6 | Pending |
+| EVAL-11 | Phase 6 | Pending |
+| EVAL-12 | Phase 7 | Pending |
+| EVAL-13 | Phase 6 | Pending |
+| EVAL-14 | Phase 6 | Pending |
+| EVAL-15 | Phase 1 | Pending |
 
 **Coverage:**
 - v1.0 requirements: 42 total
-- Mapped to phases: 0
-- Unmapped: 42 ⚠️
+- Mapped to phases: 42
+- Unmapped: 0
+
+**Per-phase counts:**
+- Phase 1: 5 (DATA-01, DATA-02, DATA-04, DATA-09, EVAL-15)
+- Phase 2: 11 (DATA-03, DATA-05, DATA-06, DATA-07, DATA-08, RAY-01–06)
+- Phase 3: 8 (EVAL-01–08)
+- Phase 4: 6 (RECON-01–06)
+- Phase 5: 6 (CAST-01–06)
+- Phase 6: 5 (EVAL-09, EVAL-10, EVAL-11, EVAL-13, EVAL-14)
+- Phase 7: 1 (EVAL-12)
 
 ---
 *Requirements defined: 2026-10-30*
-*Last updated: 2026-10-30 after initial definition*
+*Last updated: 2026-10-30 after roadmap creation (42/42 mapped)*

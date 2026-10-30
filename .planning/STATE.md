@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-10-30)
 
 **Core value:** Produce a geometrically credible, quantitatively evaluated LiDAR simulation from an RGB reconstruction, enabling a measured hybrid mesh + Gaussian speed/fidelity argument.
-**Current focus:** Milestone v1.0 — defining requirements
+**Current focus:** Milestone v1.0 — Phase 1: Preflight, Acquisition & Calibration Foundation
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-10-30 — Milestone v1.0 started
+Phase: 1 of 7 (Preflight, Acquisition & Calibration Foundation)
+Plan: 0 of 0 in current phase
+Status: Ready to plan
+Last activity: 2026-10-30 — Roadmap created for milestone v1.0 (7 phases, 42/42 requirements mapped)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -65,6 +65,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-30 20:17
-Stopped at: Bootstrapped .planning from README; milestone v1.0 summarized and confirmed
+Last session: 2026-10-30 22:10
+Stopped at: Roadmap created — Phase 1 ready to plan
 Resume file: None
