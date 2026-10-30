@@ -59,6 +59,14 @@ Produce a geometrically credible, quantitatively evaluated LiDAR simulation from
 - The environment targets Python 3.11, PyTorch 2.x, CUDA 12.x; Open3D is acceptable for offline TSDF/mesh I/O.
 - The project currently contains documentation only — no source tree yet.
 
+### Operations & Execution Rules
+
+- **Upstream repository:** This project builds on `https://github.com/Stabil1ze/RayLiDAR` (the RayLiDAR codebase). No other upstream is assumed.
+- **Container-only execution:** All run/job tasks must execute inside the project container. Container image, name, and invocation command are **TBD** — record them here once decided; do not assume a default.
+- **Data disk:** `/data-20T` is the data disk. All datasets, preprocessed artifacts, checkpoints, run outputs, and result artifacts must live under `/data-20T`. Nothing large goes on the system disk.
+- **Parallel delegation:** Tasks that are parallelizable may be delegated to parallel subagents to reduce wall-clock time; tasks with shared files or ordering constraints stay sequential.
+- **No guessing:** Never guess unknown project information (paths, container details, dataset layout, hardware, upstream forks). Ask the user before executing.
+
 ## Constraints
 
 - **Dataset**: KITTI-360, one low-dynamic segment — keeps preprocessing and reconstruction tractable.
@@ -67,6 +75,7 @@ Produce a geometrically credible, quantitatively evaluated LiDAR simulation from
 - **Compute backend**: CPU BVH reference for P1 — GPU optimization is deliberately deferred to P2.
 - **Evaluation**: GT-defined rays, 0–50 m primary range, fixed ray set and fixed hardware for comparisons.
 - **Deliverable**: Reproducible code + metrics + plots + report — results must be re-runnable, not one-off.
+- **Data location**: All data and output artifacts must live under `/data-20T`; the project container is the only execution environment for run/job tasks.
 
 ## Key Decisions
 
@@ -79,6 +88,7 @@ Produce a geometrically credible, quantitatively evaluated LiDAR simulation from
 | 2DGS→TSDF→MC deferred | Prepares the later representation change without blocking P1 | — Pending |
 | Full README metric suite | Avoids cherry-picking; enables honest comparison with published work | — Pending |
 | Single low-dynamic segment | Keeps scope achievable for the course timeline | — Pending |
+| Data + artifacts confined to `/data-20T` | Disk separation keeps large datasets/outputs off the system volume and makes runs reproducible | — Pending |
 
 ## Evolution
 
