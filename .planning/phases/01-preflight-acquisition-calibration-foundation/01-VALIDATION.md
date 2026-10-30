@@ -52,12 +52,12 @@ All commands run through `scripts/hls.sh`, which enforces the project-container 
 | 1-05-01 | 01-05 | 3 | DATA-02 | T-1-05 | Official archives present in staging; licence accepted | manual | `ls -lh /data-20T/hybrid-lidar-sim/staging` | ❌ W0 | ⬜ pending |
 | 1-05-02 | 01-05 | 3 | DATA-02 | T-1-01, T-1-02 | Safe extraction (no traversal/symlinks), allowlist, manifest | unit | `bash scripts/hls.sh pytest tests/data/test_acquire.py -q` | ❌ W0 | ⬜ pending |
 | 1-05-03 | 01-05 | 3 | DATA-02 | T-1-02 | Readiness manifest complete; only one sequence installed | integration | `bash scripts/hls.sh hls check-dataset --config configs/dataset.yaml` | ❌ W0 | ⬜ pending |
-| 1-06-01 | 01-06 | 3 | DATA-09 | T-1-06 | Projection math + synthetic alignment proxy | unit | `bash scripts/hls.sh pytest tests/data/test_overlay.py -q` | ❌ W0 | ⬜ pending |
-| 1-06-02 | 01-06 | 3 | DATA-09 | T-1-06 | Overlay CLI emits JSON + PNG with bounded image reads | integration | `bash scripts/hls.sh pytest tests/commands/test_overlay_check.py -q` | ❌ W0 | ⬜ pending |
-| 1-07-01 | 01-07 | 4 | DATA-04, DATA-09 | T-1-23 | G1 aggregator unit tests; pending-human state | unit | `bash scripts/hls.sh pytest tests/common/test_g1.py tests/commands/test_g1_check.py -q` | ❌ W0 | ⬜ pending |
-| 1-07-02 | 01-07 | 4 | DATA-04, DATA-09 | T-1-23 | Real-sequence transform assertions and ≥3 frames/camera overlays | integration | `bash scripts/hls.sh hls check-calib --config configs/frames.yaml --frames <f0,f1,f2>` and `hls overlay-check` | ❌ W0 | ⬜ pending |
-| 1-08-01 | 01-08 | 5 | DATA-09 | T-1-22 | Human measures ≥5 features per frame/camera | manual | review `artifacts/01/overlay_verification.json` schema (features ≥5, max_offset_px <2) | ❌ W0 | ⬜ pending |
-| 1-08-02 | 01-08 | 5 | DATA-09, EVAL-15 | T-1-04, T-1-24 | G1 report ties hashes, thresholds, and evidence; sign-off | integration | `bash scripts/hls.sh hls g1-check --config configs/frames.yaml --verification artifacts/01/overlay_verification.json --out artifacts/01/G1_REPORT` | ❌ W0 | ⬜ pending |
+| 1-06-01 | 01-06 | 4 | DATA-09 | T-1-06 | Projection math + synthetic alignment proxy | unit | `bash scripts/hls.sh pytest tests/data/test_overlay.py -q` | ❌ W0 | ⬜ pending |
+| 1-06-02 | 01-06 | 4 | DATA-09 | T-1-06 | Overlay CLI emits JSON + PNG with bounded image reads | integration | `bash scripts/hls.sh pytest tests/commands/test_overlay_check.py -q` | ❌ W0 | ⬜ pending |
+| 1-07-01 | 01-07 | 5 | DATA-04, DATA-09 | T-1-23 | G1 aggregator unit tests; pending-human state | unit | `bash scripts/hls.sh pytest tests/common/test_g1.py tests/commands/test_g1_check.py -q` | ❌ W0 | ⬜ pending |
+| 1-07-02 | 01-07 | 5 | DATA-04, DATA-09 | T-1-23 | Real-sequence transform assertions and ≥3 frames/camera overlays | integration | `bash scripts/hls.sh hls check-calib --config configs/frames.yaml --frames <f0,f1,f2>` and `hls overlay-check` | ❌ W0 | ⬜ pending |
+| 1-08-01 | 01-08 | 6 | DATA-09 | T-1-22 | Human measures ≥5 features per frame/camera | manual | review `artifacts/01/overlay_verification.json` schema (features ≥5, max_offset_px <2) | ❌ W0 | ⬜ pending |
+| 1-08-02 | 01-08 | 6 | DATA-09, EVAL-15 | T-1-04, T-1-24 | G1 report ties hashes, thresholds, and evidence; sign-off | integration | `bash scripts/hls.sh hls g1-check --config configs/frames.yaml --verification artifacts/01/overlay_verification.json --out artifacts/01/G1_REPORT` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

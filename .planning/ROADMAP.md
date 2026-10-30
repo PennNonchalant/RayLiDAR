@@ -45,7 +45,7 @@ Milestone v1.0 delivers a **mesh-only KITTI-360 baseline** judged by a **frozen,
 - [ ] 01-07-PLAN.md — Real-sequence G1 evidence: transforms, camera height, overlays
 - [ ] 01-08-PLAN.md — Human overlay sign-off and G1 gate decision
 
-**Wave structure:** Wave 1: 01-01 · Wave 2: 01-02 · Wave 3: 01-03, 01-04, 01-05, 01-06 · Wave 4: 01-07 · Wave 5: 01-08
+**Wave structure:** Wave 1: 01-01 · Wave 2: 01-02 · Wave 3: 01-03, 01-04, 01-05 · Wave 4: 01-06 · Wave 5: 01-07 · Wave 6: 01-08
 
 **Notes**: Package scaffolding (`src/hls/`, configs, test harness, `docs/frames.md`) is delivered here; it is infrastructure, not a mapped requirement. This phase is a hard stop if official calibration/poses cannot be obtained. The container runtime, dataset root, and image-reuse policy are decision checkpoints in 01-01 because `AGENTS.md` forbids inventing them.
 
