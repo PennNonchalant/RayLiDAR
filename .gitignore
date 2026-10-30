@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+runs/
+data/
+data-*/
+results/
+*.pt
+*.pth
+*.npz
+*.ply
+*.obj
