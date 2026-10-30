@@ -66,3 +66,19 @@ ctest --preset windows-debug
 ```
 
 The `raylidar` shared library and `raylidar_cli` targets produce `raylidar.dll` and `raylidar_cli.exe` together in `build/windows-debug/`. The CLI currently supports `--help` and `--version`; CTest runs the configured tests. Use `windows-release` for an optimized build. In Visual Studio, open the repository folder, select a preset and executable target, then build and run.
+
+## Run Checks
+
+After configuring and building, run from an **x64 VS Developer PowerShell** at the repository root:
+
+```powershell
+$env:PATH = "$env:VSINSTALLDIR/VC/Tools/Llvm/x64/bin;$env:PATH"
+$sources = git ls-files -- '*.cpp' '*.cc' '*.cxx' '*.h' '*.hh' '*.hpp' '*.hxx'
+clang-format --dry-run --Werror --style=file $sources
+
+git ls-files -- '*.cpp' '*.cc' '*.cxx' | ForEach-Object {
+    clang-tidy --quiet -p build/windows-debug $_
+    if ($LASTEXITCODE -ne 0) { throw "clang-tidy failed: $_" }
+}
+ctest --preset windows-debug -LE gpu --output-on-failure --no-tests=error
+```
