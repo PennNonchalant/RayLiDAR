@@ -6,10 +6,12 @@ and `.planning/PROJECT.md`.
 
 ## 1. Upstream
 
-This project is built on **RayLiDAR**: https://github.com/Stabil1ze/RayLiDAR
+This project is built on **RayLiDAR**: https://github.com/PennNonchalant/RayLiDAR
 
-Treat that repository as the upstream reference for code provenance and ported components.
-Do not assume, cite, or pull in any other upstream unless the user names it.
+That organization repository is the canonical upstream and the default remote (`origin`) for
+code provenance and ported components. https://github.com/Stabil1ze/RayLiDAR is a **fork** of
+it (a contributor's working copy), not the upstream. Do not assume, cite, or pull in any other
+upstream unless the user names it.
 
 ## 2. Run everything inside the project container
 
