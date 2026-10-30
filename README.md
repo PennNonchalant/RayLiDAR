@@ -42,3 +42,26 @@ tools/               Dataset preparation and offline evaluation
 ```
 
 The simulator exchanges scene assets, sensor trajectories, and scan outputs with the UE5/Cesium workflow through files.
+
+## Build and Run
+
+| Prerequisite | Version / requirement |
+| --- | --- |
+| Visual Studio | 2022 with MSVC v143, C++20, and x64 tools; tested with VS 17.14 / MSVC 19.44 |
+| CMake | 3.29+ |
+| Ninja | 1.11+ |
+| vcpkg | Manifest mode; tested with tool version 2026-09-26; dependency baseline pinned in `vcpkg.json` |
+| GPU driver | Vulkan 1.4 with acceleration-structure and ray-query support |
+
+Slang **2026.20** and Vulkan headers **1.4.363.0** are installed automatically from the pinned vcpkg manifest.
+
+From an **x64 VS Developer PowerShell** at the repository root:
+
+```powershell
+$env:VCPKG_ROOT = "C:/path/to/vcpkg"
+cmake --preset windows-debug
+cmake --build --preset windows-debug
+ctest --preset windows-debug
+```
+
+Executables are written to `build/windows-debug/`; CTest runs the configured tests. Use `windows-release` for an optimized build. In Visual Studio, open the repository folder, select a preset and executable target, then build and run.

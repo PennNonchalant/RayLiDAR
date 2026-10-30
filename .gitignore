@@ -1,4 +1,8 @@
 # Prerequisites
+.tools/
+.vs/
+CMakeUserPresets.json
+
 *.d
 
 # Compiled Object files

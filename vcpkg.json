@@ -1,0 +1,9 @@
+{
+  "name": "raylidar",
+  "version-string": "0.1.0",
+  "builtin-baseline": "d186940b2f0c4e8e5b4ff804af57d2a26fbfa091",
+  "dependencies": [
+    "vulkan-headers",
+    { "name": "shader-slang", "host": true }
+  ]
+}
