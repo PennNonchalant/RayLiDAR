@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 1 planning complete — 8 plans in 5 waves; awaiting execution
-last_updated: "2026-10-30T23:04:02.230Z"
-last_activity: 2026-10-30 -- Phase 1 planning complete
+stopped_at: Phase 1 plans revised (iteration 1/2) — 8 plans in 6 waves; awaiting execution
+last_updated: "2026-10-30T23:30:00.000Z"
+last_activity: 2026-10-30 -- Phase 1 plans revised: artifacts root, install bootstrap, G1 pair coverage, per-sequence acquisition, link sources
 progress:
   total_phases: 7
   completed_phases: 0
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-10-30)
 
 Phase: 1 of 7 (Preflight, Acquisition & Calibration Foundation)
 Plan: 0 of 8 in current phase
-Status: Ready to execute
-Last activity: 2026-10-30 -- Phase 1 planning complete
+Status: Ready to execute (plans revised iteration 1/2)
+Last activity: 2026-10-30 -- Phase 1 plans revised for checker blockers
 
 Progress: [░░░░░░░░░░] 0%
 

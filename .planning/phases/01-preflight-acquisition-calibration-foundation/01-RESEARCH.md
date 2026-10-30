@@ -172,7 +172,7 @@ If the overlay fails because the local images are raw rather than rectified, the
 
 ### 3.4 Pre-registration (EVAL-15)
 
-`docs/decisions.md` is written **before** any reconstruction, with a UTC timestamp and a SHA-256 recorded in `artifacts/01/decisions.sha256`. It freezes:
+`docs/decisions.md` is written **before** any reconstruction, with a UTC timestamp and a SHA-256 recorded in `/data-20T/hybrid-lidar-sim/artifacts/01/decisions.sha256`. It freezes:
 
 - segment selection criteria (lowest dynamic fraction, contiguous multi-stream coverage, residential/suburban preference);
 - frame-window policy (60–120 consecutive frames, ≥ 30 evaluated frames, ≥ 20 000 valid rays/frame);
@@ -204,7 +204,8 @@ tests/                   # synthetic fixtures; no real data required for units
 docs/frames.md           # normative transform reference
 docs/decisions.md        # pre-registered protocol
 scripts/                 # thin wrappers around `hls`
-artifacts/               # generated reports/overlays (gitignored)
+# Generated reports/overlays/manifests live under
+# /data-20T/hybrid-lidar-sim/artifacts/01/ (AGENTS.md §3); the repo keeps none.
 ```
 
 All run/job commands execute through `scripts/hls.sh`, which sources `.env.container` and refuses to run if `HLS_CONTAINER_RUN_CMD` is unset. Unit tests are also run through this wrapper to honour `AGENTS.md`.
@@ -234,10 +235,10 @@ All run/job commands execute through `scripts/hls.sh`, which sources `.env.conta
 |---|---|
 | Framework | pytest (Python 3.11) |
 | Config | `pyproject.toml` `[tool.pytest.ini_options]` |
-| Quick run | `bash scripts/hls.sh pytest tests -q` |
-| Full suite | `bash scripts/hls.sh pytest tests -q` |
+| Quick run | `bash scripts/hls.sh python -m pytest tests -q` |
+| Full suite | `bash scripts/hls.sh python -m pytest tests -q` |
 | Fixtures | synthetic calibration/pose/image trees under `tests/fixtures/`; no real data required |
-| Real-data gates | `artifacts/01/` reports + overlay PNGs + human sign-off |
+| Real-data gates | `/data-20T/hybrid-lidar-sim/artifacts/01/` reports + overlay PNGs + human sign-off |
 
 ### Requirement → validation map
 
@@ -253,8 +254,8 @@ All run/job commands execute through `scripts/hls.sh`, which sources `.env.conta
 
 | Behavior | Why manual | Instructions |
 |---|---|---|
-| Overlay alignment < 2 px | Pixel-level registration on real imagery is a visual measurement | Inspect `artifacts/01/overlays/frame_*/image_0*/overlay_4x.png`; measure ≥ 5 features per frame; record max offset |
-| Dataset readiness sign-off | Confirms the correct official release was acquired under the licence | Review `artifacts/01/readiness.json` against the file list in §1.1 |
+| Overlay alignment < 2 px | Pixel-level registration on real imagery is a visual measurement | Inspect `/data-20T/hybrid-lidar-sim/artifacts/01/overlays/frame_<frame:010d>/<cam>_overlay_4x.png`; measure ≥ 5 features per frame; record max offset |
+| Dataset readiness sign-off | Confirms the correct official release was acquired under the licence | Review `/data-20T/hybrid-lidar-sim/artifacts/01/readiness.json` against the file list in §1.1 |
 
 ---
 

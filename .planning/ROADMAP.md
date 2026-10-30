@@ -36,18 +36,18 @@ Milestone v1.0 delivers a **mesh-only KITTI-360 baseline** judged by a **frozen,
   5. `decisions.md` pre-registers segment selection criteria, frame window, τ values, buckets, exclusions, and primary metric with a timestamp and hash before any reconstruction starts.
 **Plans:** 8 plans
 
-- [ ] 01-01-PLAN.md — Execution contract (container/data root/acquisition policy) and package scaffold
-- [ ] 01-02-PLAN.md — Dataset layout adapter, preflight checker, and fail-loud exit contract
+- [ ] 01-01-PLAN.md — Execution contract (container/data root/artifacts root/acquisition policy) and installable package + pytest scaffold
+- [ ] 01-02-PLAN.md — Dataset layout adapter, preflight checker (incl. external KITTI-raw rejection), and fail-loud exit contract
 - [ ] 01-03-PLAN.md — `T_AB` frames/calibration module and `check-calib` artifacts
 - [ ] 01-04-PLAN.md — Protocol pre-registration (`decisions.md`, `protocol.yaml`, hash)
-- [ ] 01-05-PLAN.md — Minimal official subset acquisition and readiness manifest
-- [ ] 01-06-PLAN.md — LiDAR→image projection, overlays, and advisory edge score
-- [ ] 01-07-PLAN.md — Real-sequence G1 evidence: transforms, camera height, overlays
-- [ ] 01-08-PLAN.md — Human overlay sign-off and G1 gate decision
+- [ ] 01-05-PLAN.md — Per-sequence official subset acquisition, link sources, and readiness manifest
+- [ ] 01-06-PLAN.md — LiDAR→image projection, rectified-only overlays, and advisory edge score
+- [ ] 01-07-PLAN.md — Real-sequence G1 evidence: transforms, camera height, overlays, expected-pair coverage
+- [ ] 01-08-PLAN.md — Human overlay sign-off (full frame×camera coverage) and G1 gate decision
 
 **Wave structure:** Wave 1: 01-01 · Wave 2: 01-02 · Wave 3: 01-03, 01-04, 01-05 · Wave 4: 01-06 · Wave 5: 01-07 · Wave 6: 01-08
 
-**Notes**: Package scaffolding (`src/hls/`, configs, test harness, `docs/frames.md`) is delivered here; it is infrastructure, not a mapped requirement. This phase is a hard stop if official calibration/poses cannot be obtained. The container runtime, dataset root, and image-reuse policy are decision checkpoints in 01-01 because `AGENTS.md` forbids inventing them.
+**Notes**: Package scaffolding (`src/hls/`, configs, pytest harness, `docs/frames.md`) is delivered here; it is infrastructure, not a mapped requirement. This phase is a hard stop if official calibration/poses cannot be obtained. The container runtime, dataset root, and image-reuse policy are decision checkpoints in 01-01 because `AGENTS.md` forbids inventing them. Generated artifacts (reports, overlays, manifests, hashes) live under `/data-20T/hybrid-lidar-sim/artifacts/01/` per `AGENTS.md` §3 — the repo keeps code and `.planning/` summaries only. Acquisition uses per-component/per-sequence archives only; all-sequences archives require explicit user escalation (larger staging volume or stream-extract). G1 requires a measured entry for every observed (frame, camera) pair and rejects any non-`data_rect` image.
 
 ### Phase 2: Data Foundation & Frozen GT Ray Set
 **Goal**: Users can generate, validate, and freeze the exact GT-defined ray set that every representation will be judged on, from motion-compensated per-frame LiDAR with dynamic and ego content removed.
