@@ -1,0 +1,51 @@
+Checks: >-
+  -*,
+  readability-identifier-naming,
+  readability-braces-around-statements,
+  cppcoreguidelines-pro-type-member-init,
+  bugprone-use-after-move,
+  bugprone-dangling-handle,
+  bugprone-unused-raii,
+  bugprone-suspicious-semicolon,
+  modernize-use-nullptr,
+  modernize-use-override,
+  performance-unnecessary-value-param,
+  bugprone-narrowing-conversions
+
+# Performance and narrowing diagnostics remain warnings; the rest fail CI.
+WarningsAsErrors: >-
+  readability-*,
+  cppcoreguidelines-pro-type-member-init,
+  bugprone-use-after-move,
+  bugprone-dangling-handle,
+  bugprone-unused-raii,
+  bugprone-suspicious-semicolon,
+  modernize-*
+
+HeaderFilterRegex: '(^|[\\/])(include[\\/]raylidar|src|apps|tests)[\\/]'
+ExcludeHeaderFilterRegex: '(^|[\\/])(build[^\\/]*|vcpkg_installed|_deps)[\\/]'
+
+CheckOptions:
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.StructCase: CamelCase
+  readability-identifier-naming.UnionCase: CamelCase
+  readability-identifier-naming.EnumCase: CamelCase
+  readability-identifier-naming.TypeAliasCase: CamelCase
+  readability-identifier-naming.TypedefCase: CamelCase
+  readability-identifier-naming.TypeTemplateParameterCase: CamelCase
+
+  readability-identifier-naming.MemberCase: camelBack
+  readability-identifier-naming.MemberPrefix: m_
+  readability-identifier-naming.ConstantMemberCase: camelBack
+  readability-identifier-naming.ConstantMemberPrefix: m_
+  readability-identifier-naming.ClassMemberCase: camelBack
+  readability-identifier-naming.ClassMemberPrefix: m_
+  readability-identifier-naming.ClassConstantCase: camelBack
+  readability-identifier-naming.ClassConstantPrefix: m_
+
+  readability-identifier-naming.MethodCase: CamelCase
+  readability-identifier-naming.ClassMethodCase: CamelCase
+  readability-identifier-naming.LocalVariableCase: camelBack
+  readability-identifier-naming.LocalConstantCase: camelBack
+  readability-identifier-naming.ParameterCase: camelBack
+  readability-identifier-naming.ParameterPackCase: camelBack
