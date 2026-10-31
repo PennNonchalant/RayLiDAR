@@ -1,0 +1,48 @@
+schema_version: 1
+phase: 1
+status: preregistered
+sequence_policy:
+  candidate_sequences: [2013_05_28_drive_0000_sync]
+  status: provisional_for_calibration
+  final_selection_phase: 2
+  criteria:
+    - lowest median dynamic-pixel fraction over a 120-frame window
+    - at least 120 contiguous frames present in image_00, image_01, velodyne_points, and poses
+    - residential or suburban route preferred
+  tie_break: fewer dynamic object instances, then longer contiguous pose coverage
+  forbidden: selecting by reconstruction error, metric value, or visual mesh quality
+
+frame_window:
+  min_frames: 60
+  max_frames: 120
+  min_evaluated_frames: 30
+  min_valid_rays_per_frame: 20000
+  policy: first contiguous block satisfying all-stream intersection; no per-frame cherry-picking
+
+taus_m: [0.05, 0.20, 0.50]
+primary_tau_m: 0.20
+distance_semantics: true_euclidean
+
+buckets:
+  primary: [[0.0, 20.0], [20.0, 40.0], [40.0, 50.0]]
+  secondary: [[50.0, 60.0]]
+  edge_rule: closed_on_right_for_primary_40_50_and_secondary_50_60
+
+exclusions:
+  dynamic_classes: [car, truck, bus, motorcycle, bicycle, person, rider]
+  ego_roi_velodyne_m:
+    x: [-2.5, 2.5]
+    y: [-1.2, 1.2]
+    z: [-2.0, 0.3]
+  min_range_m: 1.5
+  max_range_m: 60.0
+  image_margin_px: 5
+  occluded_variant: reported_separately
+
+metrics:
+  primary: range_rmse_hits_micro
+  paired_with: ray_recall_and_coverage
+  secondary: [cd_l1_m, f_score_at_tau_0_20]
+  aggregation: micro_over_pooled_rays_plus_macro_per_frame
+
+protocol_change_policy: new_hash_and_new_run_id_required
