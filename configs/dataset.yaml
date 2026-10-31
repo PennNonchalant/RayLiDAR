@@ -5,7 +5,7 @@ dataset:
   artifacts_root: /data-20T/hybrid-lidar-sim/artifacts
   staging_dir: /data-20T/hybrid-lidar-sim/staging
   sequence: 2013_05_28_drive_0000_sync
-  sequence_status: installed_pending_g1
+  sequence_status: g1_evidence_ready
   cameras: [image_00, image_01]
   layout: auto
   image_policy: official_installed
