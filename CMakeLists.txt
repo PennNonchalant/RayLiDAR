@@ -13,11 +13,14 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 
+
+find_package(VulkanHeaders 1.4 CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+
 enable_testing()
 add_subdirectory(src)
 add_subdirectory(apps/cli)
 
-find_package(VulkanHeaders 1.4 CONFIG REQUIRED)
 include(cmake/SlangShaders.cmake)
 
 add_executable(raylidar_smoke apps/smoke/main.cpp)
