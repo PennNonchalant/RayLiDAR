@@ -1,23 +1,35 @@
 schema_version: 1
-phase: 1
+phase: 2
 status: preregistered
+run_id: p2-60f-step10
+supersedes:
+  frozen_at_utc: "2026-10-31T05:35:58Z"
+  sidecar: artifacts/01/decisions.sha256.prev
 sequence_policy:
   candidate_sequences: [2013_05_28_drive_0000_sync]
-  status: provisional_for_calibration
-  final_selection_phase: 2
   criteria:
-    - lowest median dynamic-pixel fraction over a 120-frame window
-    - at least 120 contiguous frames present in image_00, image_01, velodyne_points, and poses
-    - residential or suburban route preferred
-  tie_break: fewer dynamic object instances, then longer contiguous pose coverage
+    - lowest point-weighted dynamic fraction over a 60-frame window
+    - evaluated at step 10 over the full sorted usable-frame index
+    - dynamic points are the union of 3D dynamic bboxes and 2D semantic dynamic classes after ego ROI removal
+    - at least 60 usable frames and at least 20000 valid rays per frame
+  tie_break: earliest_window
   forbidden: selecting by reconstruction error, metric value, or visual mesh quality
 
 frame_window:
+  window_frames: 60
+  step_frames: 10
+  exact_frames: 60
   min_frames: 60
-  max_frames: 120
-  min_evaluated_frames: 30
+  max_frames: 60
+  min_evaluated_frames: 60
   min_valid_rays_per_frame: 20000
-  policy: first contiguous block satisfying all-stream intersection; no per-frame cherry-picking
+  policy: "lowest point-weighted dynamic fraction after ego removal over every 60-frame window at step 10"
+
+dynamic_scoring:
+  sources: [3d_bboxes, 2d_semantics]
+  union: true
+  point_weighted: true
+  after_ego_removal: true
 
 taus_m: [0.05, 0.20, 0.50]
 primary_tau_m: 0.20

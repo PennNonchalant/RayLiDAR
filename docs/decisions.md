@@ -1,27 +1,35 @@
-# Phase 1 — Pre-registered Evaluation Decisions
+# Phase 2 — Pre-registered Evaluation Decisions (revised)
 
 **Status:** PRE-REGISTERED
-**Frozen at (UTC):** 2026-10-31T05:35:58Z
+**Frozen at (UTC):** 2026-10-31T22:09:59Z
 **Hash sidecar:** /data-20T/hybrid-lidar-sim/artifacts/01/decisions.sha256
 **Machine-readable source:** configs/protocol.yaml
+**Run ID:** p2-60f-step10
+
+## Change Log
+
+- 2026-10-31 — pre-execution revision: segment window policy changed from a 120-frame median dynamic-pixel rule to a 60-frame sliding window with step 10, selected by the lowest point-weighted dynamic union (3D bboxes + 2D semantics) after ego removal; ties select the earliest window. No selection or evaluation result had been observed. Supersedes the 2026-10-31T05:35:58Z 120-frame freeze (archived sidecars decisions.sha256.prev / decisions.sha256.json.prev).
 
 ## Scope
 
-These decisions are frozen before any reconstruction, before any mesh is produced, and before any evaluation number exists. Segment selection uses the criteria below, never a metric outcome.
+These decisions are frozen before any selection score, reconstruction, mesh, or evaluation number exists. Segment selection uses the criteria below, never a metric outcome.
 
 ## Segment Selection
 
-- Candidate: `2013_05_28_drive_0000_sync` (provisional for calibration; final selection in Phase 2).
-- Criteria: lowest median dynamic-pixel fraction over a 120-frame window; at least 120 contiguous frames present in image_00, image_01, velodyne_points, and poses; residential or suburban route preferred.
-- Tie-break: fewer dynamic object instances, then longer contiguous pose coverage.
+- Candidate: `2013_05_28_drive_0000_sync`.
+- Criteria: lowest point-weighted dynamic fraction over a 60-frame window, evaluated at step 10 over the full sorted usable-frame index.
+- Dynamic points: union of 3D dynamic bboxes and 2D semantic dynamic classes, after ego ROI removal; per-source and union counts are recorded per frame.
+- Window score: micro average `Σ dynamic / Σ (dynamic + static)` over the window, never a mean of per-frame ratios.
+- Tie-break: earliest window.
 - Forbidden: selecting by reconstruction error, metric value, or visual mesh quality.
 
 ## Frame Window
 
-- 60–120 consecutive frames.
-- At least 30 evaluated frames.
+- Exactly 60 consecutive usable frames.
+- Step 10 between candidate window starts.
+- At least 60 evaluated frames.
 - At least 20 000 valid rays per frame.
-- Policy: the first contiguous block satisfying the all-stream intersection; no per-frame cherry-picking.
+- Policy: every 60-frame window at step 10 over the full sorted usable-frame index; no per-frame cherry-picking; the last partial window is not a candidate.
 
 ## Metrics and Thresholds
 
