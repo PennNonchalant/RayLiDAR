@@ -73,7 +73,8 @@ TEST_CASE("AzimuthFraction follows the devkit 0.5 + atan2/2pi convention", "[lid
     CHECK_THAT(AzimuthFraction({10.0, 0.0, 0.0}), WithinAbs(0.5, kTolerance));
     CHECK_THAT(AzimuthFraction({0.0, 10.0, 0.0}), WithinAbs(0.75, kTolerance));
     CHECK_THAT(AzimuthFraction({0.0, -10.0, 0.0}), WithinAbs(0.25, kTolerance));
-    CHECK_THAT(AzimuthFraction({-10.0, 0.0, 0.0}), WithinAbs(0.0, kTolerance));
+    // atan2(+0, -10) is +pi, which is clamped just below one full sweep.
+    CHECK_THAT(AzimuthFraction({-10.0, 0.0, 0.0}), WithinAbs(1.0 - 1e-12, kTolerance));
 
     const double positivePi = AzimuthFraction({-10.0, 0.0, 0.0});
     CHECK(positivePi >= 0.0);
@@ -107,11 +108,12 @@ TEST_CASE("A known yaw rotation produces the analytically expected rotation", "[
         Params(Eigen::Matrix4d::Identity(), Yaw(0.2));
 
     const Eigen::Vector3d atHalf(10.0, 0.0, 0.0);
-    const Eigen::Vector3d expectedHalf = Yaw(0.1) * atHalf;
+    const Eigen::Vector3d expectedHalf = Yaw(0.1).block<3, 3>(0, 0) * atHalf;
     CheckVector(UncurlPoint(atHalf, params), expectedHalf);
 
     const Eigen::Vector3d atThreeQuarters(0.0, 10.0, 0.0);
-    const Eigen::Vector3d expectedThreeQuarters = Yaw(0.15) * atThreeQuarters;
+    const Eigen::Vector3d expectedThreeQuarters =
+        Yaw(0.15).block<3, 3>(0, 0) * atThreeQuarters;
     CheckVector(UncurlPoint(atThreeQuarters, params), expectedThreeQuarters);
 }
 
