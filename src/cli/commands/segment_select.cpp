@@ -11,18 +11,22 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <set>
 #include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -71,6 +75,7 @@ void PrintHelp(std::ostream &out)
         << "  --out-dir <path>      Segment directory (default: <phase_dir>/segment)\n"
         << "  --max-frames <n>      Smoke cap; implies a smoke run\n"
         << "  --stride <n>          Smoke stride; implies a smoke run\n"
+        << "  --jobs <n>            Parallel scoring workers (default: 1)\n"
         << "  --help                Show this help\n"
         << "\n"
         << "Exit codes: 0 success, 2 usage, 4 invalid input, 6 no candidate window.\n";
@@ -295,9 +300,9 @@ nlohmann::json PartialScores(const std::vector<FrameScore> &scores, std::string_
 
 int Execute(std::span<const std::string_view> args)
 {
-    const ParsedArgs parsed =
-        ParseArgs(args, {"config", "frame-index", "bboxes", "out-dir", "max-frames", "stride"},
-                  {"help"});
+    const ParsedArgs parsed = ParseArgs(
+        args, {"config", "frame-index", "bboxes", "out-dir", "max-frames", "stride", "jobs"},
+        {"help"});
     if (parsed.Flag("help"))
     {
         PrintHelp(std::cout);
@@ -382,6 +387,13 @@ int Execute(std::span<const std::string_view> args)
     }
     Require(!frames.empty(), "segment-select needs at least one usable frame");
 
+    int jobs = 1;
+    const std::string jobsText = parsed.Get("jobs", "");
+    if (!jobsText.empty())
+    {
+        jobs = ParsePositive(jobsText, "--jobs");
+    }
+
     if (!smoke && frames.size() < static_cast<std::size_t>(minUsableFrames))
     {
         throw IoError("only " + std::to_string(frames.size()) + " usable frames; " +
@@ -405,22 +417,71 @@ int Execute(std::span<const std::string_view> args)
     inputs.minScenePointsPerFrame = minScenePoints;
     inputs.timestamps = &timestamps;
 
-    std::vector<FrameScore> scores;
-    scores.reserve(frames.size());
-    const std::size_t progressEvery = smoke ? frames.size() : 250U;
-    for (std::size_t index = 0; index < frames.size(); ++index)
+    std::vector<FrameScore> scores(frames.size());
+    const std::size_t total = frames.size();
+    std::atomic<std::size_t> completed{0};
+    std::atomic<bool> stop{false};
+    std::mutex errorMutex;
+    std::exception_ptr firstError;
+
+    const auto worker = [&](const std::size_t begin, const std::size_t end) {
+        try
+        {
+            for (std::size_t index = begin; index < end && !stop.load(); ++index)
+            {
+                scores[index] = ScoreFrame(frames[index], datasetRoot, lidarRoot, calib, poses,
+                                           boxes, inputs);
+                const std::size_t done = completed.fetch_add(1U) + 1U;
+                if (jobs == 1 && !smoke && done % 250U == 0U)
+                {
+                    std::cerr << "scored " << done << '/' << total << '\n' << std::flush;
+                    WriteJson(outDir / "segment_scores.partial.json",
+                              PartialScores(scores, sequence));
+                }
+                else if (jobs > 1 && done % 500U == 0U)
+                {
+                    std::cerr << "scored " << done << '/' << total << '\n' << std::flush;
+                }
+            }
+        }
+        catch (...)
+        {
+            stop.store(true);
+            const std::lock_guard<std::mutex> lock(errorMutex);
+            if (!firstError)
+            {
+                firstError = std::current_exception();
+            }
+        }
+    };
+
+    if (jobs <= 1)
     {
-        scores.push_back(ScoreFrame(frames[index], datasetRoot, lidarRoot, calib, poses, boxes,
-                                    inputs));
-        const std::size_t done = index + 1U;
-        if (done % progressEvery == 0U || done == frames.size())
+        worker(0U, total);
+    }
+    else
+    {
+        const std::size_t workerCount = std::min<std::size_t>(static_cast<std::size_t>(jobs), total);
+        std::vector<std::thread> threads;
+        threads.reserve(workerCount);
+        for (std::size_t index = 0; index < workerCount; ++index)
         {
-            std::cerr << "scored " << done << '/' << frames.size() << '\n' << std::flush;
+            const std::size_t begin = total * index / workerCount;
+            const std::size_t end = total * (index + 1U) / workerCount;
+            threads.emplace_back(worker, begin, end);
         }
-        if (!smoke && done % 500U == 0U)
+        for (std::thread &thread : threads)
         {
-            WriteJson(outDir / "segment_scores.partial.json", PartialScores(scores, sequence));
+            thread.join();
         }
+    }
+    if (firstError)
+    {
+        std::rethrow_exception(firstError);
+    }
+    if (completed.load() != total)
+    {
+        throw IoError("scoring stopped before every frame was processed", kExitInvalidInput);
     }
 
     const std::vector<WindowScore> windows = CandidateWindows(scores, windowFrames, stepFrames);
