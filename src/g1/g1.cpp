@@ -28,6 +28,9 @@ constexpr const char *kPendingHuman = "pending_human";
 
 constexpr const char *kRectifiedFlag = "rectified_data_rect_only";
 constexpr const char *kOffsetUnit = "original_1x_px";
+constexpr const char *kAttestationKey = "attestation";
+constexpr const char *kAttestationAllBelow = "all_offsets_below_threshold";
+constexpr const char *kThresholdPxKey = "threshold_px";
 
 // Hard thresholds live here as code constants. `Thresholds()` returns this
 // object and nothing can replace it.
@@ -89,6 +92,17 @@ bool TryGetNumber(const nlohmann::json &value, double &out)
     }
     out = number;
     return true;
+}
+
+bool HasAllBelowAttestation(const nlohmann::json &object)
+{
+    if (!object.is_object())
+    {
+        return false;
+    }
+    const auto found = object.find(kAttestationKey);
+    return found != object.end() && found->is_string() &&
+           found->get<std::string>() == kAttestationAllBelow;
 }
 
 std::string PairLabel(int frame, const std::string &camera)
@@ -344,6 +358,27 @@ std::vector<std::string> ValidateOverlayVerification(
         errors.emplace_back("measured_at_utc must match YYYY-MM-DDTHH:MM:SSZ");
     }
 
+    const bool attestationMode = HasAllBelowAttestation(obj);
+    const auto attestationIt = obj.find(kAttestationKey);
+    if (attestationIt != obj.end() &&
+        (!attestationIt->is_string() ||
+         attestationIt->get<std::string>() != kAttestationAllBelow))
+    {
+        errors.emplace_back("attestation must be \"all_offsets_below_threshold\"");
+    }
+    if (attestationMode)
+    {
+        const auto thresholdIt = obj.find(kThresholdPxKey);
+        double threshold = 0.0;
+        if (thresholdIt == obj.end() || !TryGetNumber(*thresholdIt, threshold) ||
+            std::abs(threshold - kThresholds.overlayMaxOffsetPx) > 1e-9)
+        {
+            errors.emplace_back("threshold_px must equal " +
+                                FormatValue(kThresholds.overlayMaxOffsetPx) +
+                                " when attestation is used");
+        }
+    }
+
     const auto framesIt = obj.find("frames");
     if (framesIt == obj.end() || !framesIt->is_array())
     {
@@ -399,10 +434,16 @@ std::vector<std::string> ValidateOverlayVerification(
         }
 
         const auto offsetIt = entry.find("max_offset_px");
-        double offset = 0.0;
-        if (offsetIt == entry.end() || !TryGetNumber(*offsetIt, offset) || offset < 0.0)
+        const bool attestedPair =
+            attestationMode && (offsetIt == entry.end() || offsetIt->is_null());
+        if (!attestedPair)
         {
-            errors.push_back(prefix + "max_offset_px must be a finite number >= 0");
+            double offset = 0.0;
+            if (offsetIt == entry.end() || !TryGetNumber(*offsetIt, offset) ||
+                offset < 0.0)
+            {
+                errors.push_back(prefix + "max_offset_px must be a finite number >= 0");
+            }
         }
 
         const auto notesIt = entry.find("notes");
@@ -953,6 +994,14 @@ nlohmann::json EvaluateG1(const nlohmann::json &preflight, const nlohmann::json 
                                             expectedOk ? &expected : nullptr);
             errors.insert(errors.end(), schemaErrors.begin(), schemaErrors.end());
 
+            const bool attestationMode = HasAllBelowAttestation(*verification);
+            if (attestationMode)
+            {
+                measured["attestation"] = kAttestationAllBelow;
+                measured["threshold_px"] = kThresholds.overlayMaxOffsetPx;
+                threshold["attestation"] = kAttestationAllBelow;
+            }
+
             nlohmann::json pairEntries = nlohmann::json::array();
             int measuredPairs = 0;
             bool hasOffset = false;
@@ -979,20 +1028,36 @@ nlohmann::json EvaluateG1(const nlohmann::json &preflight, const nlohmann::json 
                         const int frame = frameIt->get<int>();
                         const std::string camera = cameraIt->get<std::string>();
                         double offset = 0.0;
-                        if (offsetIt == entry.end() || !TryGetNumber(*offsetIt, offset))
+                        const bool numericOffset =
+                            offsetIt != entry.end() && TryGetNumber(*offsetIt, offset);
+                        const bool attestedPair =
+                            attestationMode &&
+                            (offsetIt == entry.end() || offsetIt->is_null());
+                        if (!numericOffset && !attestedPair)
                         {
                             continue;
                         }
                         ++measuredPairs;
-                        hasOffset = true;
-                        maxOffset = std::max(maxOffset, offset);
-                        pairEntries.push_back(
-                            {{"frame", frame},
-                             {"camera", camera},
-                             {"max_offset_px", offset},
-                             {"features_measured",
-                              GetInt(entry, "features_measured", 0)}});
-                        if (offset >= kThresholds.overlayMaxOffsetPx)
+                        if (numericOffset)
+                        {
+                            hasOffset = true;
+                            maxOffset = std::max(maxOffset, offset);
+                        }
+                        nlohmann::json pair = {
+                            {"frame", frame},
+                            {"camera", camera},
+                            {"max_offset_px",
+                             numericOffset ? nlohmann::json(offset)
+                                           : nlohmann::json(nullptr)},
+                            {"features_measured",
+                             GetInt(entry, "features_measured", 0)}};
+                        if (attestedPair)
+                        {
+                            pair["attested"] = true;
+                        }
+                        pairEntries.push_back(std::move(pair));
+                        if (numericOffset &&
+                            offset >= kThresholds.overlayMaxOffsetPx)
                         {
                             errors.push_back("offset " + FormatValue(offset) +
                                              " px for pair " +
@@ -1105,6 +1170,14 @@ std::string RenderMarkdown(const nlohmann::json &report)
         const auto measured = offsets->find("measured");
         if (measured != offsets->end() && measured->is_object())
         {
+            const bool attested =
+                measured->value("attestation", std::string()) == kAttestationAllBelow;
+            if (attested)
+            {
+                out << "Reviewer attestation: all measured offsets are < "
+                    << FormatValue(kThresholds.overlayMaxOffsetPx)
+                    << " px (original 1×).\n\n";
+            }
             const auto pairs = measured->find("pairs");
             if (pairs != measured->end() && pairs->is_array() && !pairs->empty())
             {
@@ -1115,8 +1188,14 @@ std::string RenderMarkdown(const nlohmann::json &report)
                     out << "| " << GetInt(entry, "frame", 0) << " | "
                         << GetString(entry, "camera") << " | ";
                     const auto offset = entry.find("max_offset_px");
-                    out << FormatValue(offset == entry.end() ? nlohmann::json()
-                                                             : offset.value());
+                    if (offset == entry.end() || offset->is_null())
+                    {
+                        out << (attested ? "attested < 2.0" : "null");
+                    }
+                    else
+                    {
+                        out << FormatValue(offset.value());
+                    }
                     out << " | " << GetInt(entry, "features_measured", 0) << " |\n";
                     wroteAny = true;
                 }

@@ -210,6 +210,51 @@ TEST_CASE("offsets of exactly 2.0 px fail the strict gate", "[g1]")
     CHECK(report["pass"] == false);
 }
 
+TEST_CASE("qualitative attestation passes when every pair is covered", "[g1]")
+{
+    nlohmann::json verification = MakeVerification();
+    verification["attestation"] = "all_offsets_below_threshold";
+    verification["threshold_px"] = 2.0;
+    for (nlohmann::json &entry : verification["frames"])
+    {
+        entry["max_offset_px"] = nullptr;
+        entry["notes"] = "visual attestation";
+    }
+
+    const auto expected = ExpectedPairsFromOverlay(MakeOverlayReport());
+    CHECK(ValidateOverlayVerification(verification, &expected).empty());
+
+    const nlohmann::json report =
+        Evaluate(MakeCalibReport(), MakeOverlayReport(), &verification);
+    CHECK(CheckStatus(report, "overlay_offsets") == "pass");
+    CHECK(report["pass"] == true);
+    CHECK(RenderMarkdown(report).find("Reviewer attestation") != std::string::npos);
+}
+
+TEST_CASE("attestation cannot hide a numeric offset of 2.0 px", "[g1]")
+{
+    nlohmann::json verification = MakeVerification();
+    verification["attestation"] = "all_offsets_below_threshold";
+    verification["threshold_px"] = 2.0;
+    verification["frames"][0]["max_offset_px"] = 2.0;
+
+    const nlohmann::json report =
+        Evaluate(MakeCalibReport(), MakeOverlayReport(), &verification);
+    CHECK(CheckStatus(report, "overlay_offsets") == "fail");
+    CHECK(report["pass"] == false);
+}
+
+TEST_CASE("unknown attestation is a schema error", "[g1]")
+{
+    nlohmann::json verification = MakeVerification();
+    verification["attestation"] = "trust-me";
+
+    const auto expected = ExpectedPairsFromOverlay(MakeOverlayReport());
+    const std::vector<std::string> errors =
+        ValidateOverlayVerification(verification, &expected);
+    CHECK(!errors.empty());
+}
+
 TEST_CASE("fewer than five measured features is a schema error", "[g1]")
 {
     nlohmann::json verification = MakeVerification();
