@@ -1,5 +1,6 @@
 #include "fixture.h"
 
+#include <raylidar/cli/commands_phase2.h>
 #include <raylidar/common/io.h>
 #include <raylidar/dataset/streams.h>
 
@@ -10,6 +11,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -277,4 +279,122 @@ TEST_CASE("JSON counts and CSV columns match the frozen schema", "[streams]")
     REQUIRE(header ==
             "frame,image_00,image_01,velodyne,timestamp,next_timestamp,pose,next_pose,"
             "cam0_to_world,semantics_00,semantics_01");
+}
+
+namespace
+{
+void WriteCliConfig(const fs::path &path, const Tree &tree)
+{
+    const std::string text =
+        "schema_version: 1\n"
+        "phase: 2\n"
+        "sequence: " + std::string(kSequence) + "\n"
+        "dataset_root: " + tree.root.string() + "\n"
+        "lidar_root: " + tree.lidar.string() + "\n"
+        "cameras: [image_00, image_01]\n"
+        "streams:\n"
+        "  require_exact_pose: true\n"
+        "  require_next_pose: true\n"
+        "  require_semantics: true\n";
+    WriteText(path, text);
+}
+
+int RunFrameIndexCli(const std::vector<std::string> &owned)
+{
+    std::vector<std::string_view> args;
+    args.reserve(owned.size());
+    for (const std::string &argument : owned)
+    {
+        args.emplace_back(argument);
+    }
+    std::span<const std::string_view> view(args);
+    return RunFrameIndex(view);
+}
+} // namespace
+
+TEST_CASE("frame-index writes all three artifacts on a synthetic tree", "[streams][cli]")
+{
+    Tree tree = MakeTree("streams_cli_ok");
+    WriteFrameStreams(tree, 0);
+    WriteFrameStreams(tree, 1);
+    WriteTimestamps(tree, {"t0", "t1", "t2"});
+    WritePoses(tree, {0, 1, 2});
+
+    const fs::path config = tree.root / "phase2.yaml";
+    WriteCliConfig(config, tree);
+    const fs::path outDir = tree.root / "streams";
+
+    const std::vector<std::string> args = {"--config",
+                                           config.string(),
+                                           "--root",
+                                           tree.root.string(),
+                                           "--lidar-root",
+                                           tree.lidar.string(),
+                                           "--sequence",
+                                           kSequence,
+                                           "--out-dir",
+                                           outDir.string()};
+    REQUIRE(RunFrameIndexCli(args) == 0);
+
+    REQUIRE(fs::is_regular_file(outDir / "frame_index.json"));
+    REQUIRE(fs::is_regular_file(outDir / "frame_index.csv"));
+    REQUIRE(fs::is_regular_file(outDir / "dropped_frames.json"));
+
+    const nlohmann::json frameIndex = raylidar::ReadJson(outDir / "frame_index.json");
+    REQUIRE(frameIndex.at("usable_frames") == nlohmann::json::array({0, 1}));
+    REQUIRE(frameIndex.at("counts").at("dropped").get<int>() == 0);
+
+    std::ifstream csv(outDir / "frame_index.csv");
+    REQUIRE(csv.good());
+    std::string header;
+    std::getline(csv, header);
+    REQUIRE(header.rfind("frame,image_00,image_01,velodyne,timestamp,next_timestamp,pose,"
+                         "next_pose,cam0_to_world,semantics_00,semantics_01",
+                         0) == 0);
+
+    std::error_code error;
+    fs::remove(ImagePath(tree, "image_01", 1), error);
+    const fs::path droppedDir = tree.root / "streams_dropped";
+    const std::vector<std::string> droppedArgs = {"--config",
+                                                  config.string(),
+                                                  "--root",
+                                                  tree.root.string(),
+                                                  "--lidar-root",
+                                                  tree.lidar.string(),
+                                                  "--sequence",
+                                                  kSequence,
+                                                  "--out-dir",
+                                                  droppedDir.string()};
+    REQUIRE(RunFrameIndexCli(droppedArgs) == 0);
+
+    const nlohmann::json dropped = raylidar::ReadJson(droppedDir / "dropped_frames.json");
+    REQUIRE(dropped.at("dropped").is_array());
+    REQUIRE(dropped.at("dropped").size() == 1U);
+    REQUIRE(dropped.at("dropped").front().at("missing").is_array());
+    REQUIRE_FALSE(dropped.at("dropped").front().at("missing").empty());
+}
+
+TEST_CASE("frame-index exits 4 when the config is missing", "[streams][cli]")
+{
+    Tree tree = MakeTree("streams_cli_missing_config");
+    const std::vector<std::string> args = {"--config",
+                                           (tree.root / "absent.yaml").string(),
+                                           "--root",
+                                           tree.root.string(),
+                                           "--lidar-root",
+                                           tree.lidar.string(),
+                                           "--sequence",
+                                           kSequence,
+                                           "--out-dir",
+                                           (tree.root / "streams").string()};
+    REQUIRE(RunFrameIndexCli(args) == 4);
+}
+
+TEST_CASE("frame-index rejects an unknown option with exit 2", "[streams][cli]")
+{
+    Tree tree = MakeTree("streams_cli_unknown_option");
+    const fs::path config = tree.root / "phase2.yaml";
+    WriteCliConfig(config, tree);
+    const std::vector<std::string> args = {"--config", config.string(), "--bogus", "x"};
+    REQUIRE(RunFrameIndexCli(args) == 2);
 }
