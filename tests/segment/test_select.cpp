@@ -24,7 +24,6 @@ using raylidar::segment::SegmentInputs;
 using raylidar::segment::SelectionManifest;
 using raylidar::segment::SelectWindow;
 using raylidar::segment::WindowScore;
-using raylidar::test::MakeSyntheticFrameIndex;
 using raylidar::test::MakeSyntheticSegmentTree;
 using raylidar::test::SyntheticSegmentTree;
 
