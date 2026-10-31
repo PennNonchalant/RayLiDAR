@@ -70,3 +70,8 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Local-only working directories (kept out of the repository)
+docs-local/
+.planning/
+.git/
