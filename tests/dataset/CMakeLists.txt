@@ -1,5 +1,6 @@
 add_executable(raylidar_test_dataset
     fixture.cpp
+    test_acquire.cpp
     test_layout.cpp
     test_preflight.cpp)
 target_link_libraries(raylidar_test_dataset PRIVATE raylidar::raylidar Catch2::Catch2WithMain)
