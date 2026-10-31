@@ -1,0 +1,40 @@
+# Phase 1 dataset contract. Values mirror
+# /data-20T/hybrid-lidar-sim/artifacts/01/execution_contract.md.
+dataset:
+  root: /data-20T/hybrid-lidar-sim/raw/kitti360
+  artifacts_root: /data-20T/hybrid-lidar-sim/artifacts
+  staging_dir: /data-20T/hybrid-lidar-sim/staging
+  sequence: 2013_05_28_drive_0000_sync
+  sequence_status: installed_pending_g1
+  cameras: [image_00, image_01]
+  layout: auto
+  image_policy: official_installed
+  image_provenance: official_data_rect
+  accept_reuse_after_g1: false
+  scan_roots: [/data-20T/kitti]
+  link_sources:
+    image_00: ""                                  # official data_rect installed, no link
+    image_01: ""                                  # official data_rect installed, no link
+    lidar: /data-20T/kitti/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points
+    image_00_timestamps: /data-20T/kitti/raw/2013_05_28/2013_05_28_drive_0000_sync/image_00/timestamps.txt
+    image_01_timestamps: /data-20T/kitti/raw/2013_05_28/2013_05_28_drive_0000_sync/image_01/timestamps.txt
+  required_components:
+    calibration:
+      - calibration/calib_cam_to_pose.txt
+      - calibration/calib_cam_to_velo.txt
+      - calibration/perspective.txt
+    poses:
+      - data_poses/{sequence}/poses.txt
+      - data_poses/{sequence}/cam0_to_world.txt
+    images:
+      - data_2d_raw/{sequence}/image_00/data_rect
+      - data_2d_raw/{sequence}/image_01/data_rect
+    semantics:
+      - data_2d_semantics/train/{sequence}/image_00/semantic
+      - data_2d_semantics/train/{sequence}/image_01/semantic
+    lidar:
+      - data_3d_raw/{sequence}/velodyne_points/data
+  forbidden_calibration_names:
+    - calib_cam_to_cam.txt
+    - calib_velo_to_cam.txt
+    - calib_imu_to_velo.txt
