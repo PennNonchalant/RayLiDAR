@@ -13,6 +13,7 @@ using raylidar::gt::CameraEligibility;
 using raylidar::gt::EvaluateCameraEligibility;
 using raylidar::test::MakeTwoCameraRig;
 using raylidar::test::Translate;
+using raylidar::test::TwoCameraRig;
 
 constexpr double kTolerance = 1e-9;
 
@@ -104,8 +105,8 @@ TEST_CASE("an in-FOV point outside [1.5,60] m reports range_out_of_domain", "[gt
 {
     const TwoCameraRig rig = MakeTwoCameraRig();
 
-    const auto near = Evaluate(Eigen::Vector3d(0.0, 0.0, 0.5), rig.T_Ck_rect_V["image_00"],
-                               rig.K_rect["image_00"], 400, 300);
+    const auto near = Evaluate(Eigen::Vector3d(0.0, 0.0, 0.5), rig.T_Ck_rect_V.at("image_00"),
+                               rig.K_rect.at("image_00"), 400, 300);
     CHECK(near.zPositive);
     CHECK(near.inImageMargin);
     CHECK_FALSE(near.rangeOk);
@@ -117,8 +118,8 @@ TEST_CASE("an in-FOV point outside [1.5,60] m reports range_out_of_domain", "[gt
     CHECK(assignment.camera == 255U);
     CHECK(assignment.r_gt == -1.0);
 
-    const auto far = Evaluate(Eigen::Vector3d(0.0, 0.0, 80.0), rig.T_Ck_rect_V["image_00"],
-                              rig.K_rect["image_00"], 400, 300);
+    const auto far = Evaluate(Eigen::Vector3d(0.0, 0.0, 80.0), rig.T_Ck_rect_V.at("image_00"),
+                              rig.K_rect.at("image_00"), 400, 300);
     CHECK(far.zPositive);
     CHECK(far.inImageMargin);
     CHECK_FALSE(far.rangeOk);
