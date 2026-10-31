@@ -1,5 +1,24 @@
-add_library(raylidar SHARED version.cpp)
+add_library(raylidar SHARED)
 add_library(raylidar::raylidar ALIAS raylidar)
+
+target_sources(raylidar PRIVATE
+    version.cpp
+
+    # Vulkan
+    
+    # Simulation
+)
+
+target_link_libraries(raylidar PRIVATE
+    Vulkan::Headers
+    GPUOpen::VulkanMemoryAllocator
+    ${CMAKE_DL_LIBS}
+)
+
+target_compile_definitions(raylidar PRIVATE
+    VMA_STATIC_VULKAN_FUNCTIONS=0
+    VMA_DYNAMIC_VULKAN_FUNCTIONS=1
+)
 
 target_compile_features(raylidar PUBLIC cxx_std_20)
 target_compile_definitions(raylidar PRIVATE RAYLIDAR_VERSION="${PROJECT_VERSION}")
@@ -14,3 +33,7 @@ generate_export_header(raylidar
 target_include_directories(raylidar PUBLIC
     "${PROJECT_SOURCE_DIR}/include"
     "${PROJECT_BINARY_DIR}/include")
+
+target_precompile_headers(raylidar PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/pch.h"
+)
