@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  code-quality:
+    name: Code quality
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Use Visual Studio LLVM and Ninja
+        run: |
+          $llvmBin = Join-Path $env:VSINSTALLDIR 'VC/Tools/Llvm/x64/bin'
+          $ninjaBin = Join-Path $env:VSINSTALLDIR 'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja'
+          $llvmBin >> $env:GITHUB_PATH
+          $ninjaBin >> $env:GITHUB_PATH
+          & "$llvmBin/clang-format.exe" --version
+          & "$llvmBin/clang-tidy.exe" --version
+          & "$ninjaBin/ninja.exe" --version
+
+      - name: Check formatting
+        run: |
+          $sources = git ls-files -- '*.cpp' '*.cc' '*.cxx' '*.h' '*.hh' '*.hpp' '*.hxx'
+          & clang-format --dry-run --Werror --style=file $sources
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Set up pinned vcpkg
+        run: |
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          $baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          & git -C $vcpkgRoot fetch origin $baseline
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & git -C $vcpkgRoot checkout --detach $baseline
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$vcpkgRoot/bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+
+      - name: Configure
+        run: cmake --preset windows-debug
+
+      - name: Build
+        run: cmake --build --preset windows-debug
+
+      - name: Check naming and errors; report performance and conversions
+        run: |
+          $sources = git ls-files -- '*.cpp' '*.cc' '*.cxx'
+          foreach ($source in $sources) {
+            & clang-tidy --quiet -p build/windows-debug $source
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Run CPU tests
+        run: ctest --preset windows-debug -LE gpu --output-on-failure --no-tests=error

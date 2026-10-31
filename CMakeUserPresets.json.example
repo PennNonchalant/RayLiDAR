@@ -1,0 +1,16 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "local-debug",
+      "inherits": "windows-debug",
+      "environment": { "VCPKG_ROOT": "C:/path/to/vcpkg" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "local-debug", "configurePreset": "local-debug" }
+  ],
+  "testPresets": [
+    { "name": "local-debug", "configurePreset": "local-debug", "output": { "outputOnFailure": true } }
+  ]
+}

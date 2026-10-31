@@ -1,3 +1,82 @@
+# Prerequisites
+.tools/
+.vs/
+CMakeUserPresets.json
+
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Linker files
+*.ilk
+
+# Debugger Files
+*.pdb
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+*.so.*
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Build directories
+build/
+Build/
+build-*/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*.swp
+
+# vcpkg
+vcpkg_installed/
+
+# debug information files
+*.dwo
+
+# test output & cache
+Testing/
+.cache/
+
+# Local-only working directories (kept out of the repository)
+docs-local/
+.planning/
+.git/
+
+# Python / experiment data (from the project planning branch)
 __pycache__/
 *.pyc
 .venv/
@@ -10,4 +89,6 @@ results/
 *.pth
 *.npz
 *.ply
-*.obj
+
+# Local agent instructions
+AGENTS.md
