@@ -9,4 +9,5 @@
 /// instead of shelling out to `raylidar_cli`.
 RAYLIDAR_EXPORT int RunCheckCalib(std::span<const std::string_view> args);
 RAYLIDAR_EXPORT int RunDataset(std::span<const std::string_view> args);
+RAYLIDAR_EXPORT int RunOverlayCheck(std::span<const std::string_view> args);
 RAYLIDAR_EXPORT int RunPrereg(std::span<const std::string_view> args);
