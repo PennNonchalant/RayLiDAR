@@ -1,7 +1,7 @@
 # Phase 1 — Pre-registered Evaluation Decisions
 
 **Status:** PRE-REGISTERED
-**Frozen at (UTC):** PENDING
+**Frozen at (UTC):** 2026-10-31T05:35:58Z
 **Hash sidecar:** /data-20T/hybrid-lidar-sim/artifacts/01/decisions.sha256
 **Machine-readable source:** configs/protocol.yaml
 
