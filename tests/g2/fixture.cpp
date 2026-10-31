@@ -69,8 +69,8 @@ void WriteCalibration(const fs::path &datasetRoot)
     WriteG2TextFile(calibration / "perspective.txt",
                     "P_rect_00: 100 0 32 0 0 100 24 0 0 0 1 0\n"
                     "P_rect_01: 100 0 32 0 0 100 24 0 0 0 1 0\n"
-                    "R_rect_00: 1 0 0 0 1 0 0 0 0 1\n"
-                    "R_rect_01: 1 0 0 0 1 0 0 0 0 1\n");
+                    "R_rect_00: 1 0 0 0 1 0 0 0 1\n"
+                    "R_rect_01: 1 0 0 0 1 0 0 0 1\n");
 }
 
 void WritePoses(const fs::path &datasetRoot, const std::vector<int> &frames)
