@@ -57,8 +57,8 @@ TEST_CASE("mask-build writes one complete artifact per frame", "[masking]")
         const nlohmann::json mask = ReadJson(frameDir / "mask.json");
         CHECK(mask["frame"].get<int>() == frame);
         CHECK(mask["point_count"].get<std::size_t>() == tree.pointCount);
-        CHECK(mask.contains("dynamic_union"));
-        CHECK(mask.contains("ego_roi"));
+        CHECK(mask["counts"].contains("dynamic_union"));
+        CHECK(mask["counts"].contains("ego_roi"));
         CHECK(mask.contains("residual_dynamic"));
         CHECK(mask["applies_to"].size() == 4U);
         CHECK(mask["counts"].contains("overlap_2d_only"));
