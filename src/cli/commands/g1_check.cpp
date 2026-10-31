@@ -465,9 +465,22 @@ int Execute(std::span<const std::string_view> args)
     const nlohmann::json calibReport = raylidar::ReadJson(calibReportPath);
     const nlohmann::json overlayReport = raylidar::ReadJson(overlayReportPath);
 
-    const nlohmann::json report =
+    nlohmann::json report =
         EvaluateG1(preflight, readiness, calibReport, overlayReport, prereg,
                    haveVerification ? &verification : nullptr);
+
+    // Repudiation defence (T-1-25): record the exact inputs that produced this
+    // gate decision alongside the timestamp and sequence id inside the report.
+    report["inputs"] = {{"config", configPath.string()},
+                        {"calib_report", calibReportPath.string()},
+                        {"overlay_report", overlayReportPath.string()},
+                        {"readiness", readinessPath.string()},
+                        {"preflight", preflightPath.string()},
+                        {"prereg_json", preregPath.string()},
+                        {"decisions", decisionsPath.string()},
+                        {"sidecar", sidecarPath.string()},
+                        {"verification",
+                         haveVerification ? verificationPath.string() : ""}};
 
     if (parsed.Has("emit-worksheet"))
     {
