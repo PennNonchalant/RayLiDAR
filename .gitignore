@@ -92,3 +92,10 @@ results/
 
 # Local agent instructions
 AGENTS.md
+
+# Local container configuration (never commit; may contain host paths)
+.env.container
+
+# Generated data/artifacts (live on /data-20T, never in the repo)
+artifacts/
+staging/

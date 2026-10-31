@@ -16,6 +16,23 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 
+# Test infrastructure. include(CTest) defines BUILD_TESTING; tests are CPU-only.
+include(CTest)
+
+# Phase 1 dependencies (pinned by vcpkg.json + builtin-baseline).
+find_package(Eigen3 CONFIG REQUIRED)
+find_package(yaml-cpp CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(Stb REQUIRED)
+# The vcpkg libarchive port ships only a CMake Find module (no CONFIG package),
+# so try CONFIG first and fall back to the Find module. Both paths provide the
+# imported target LibArchive::LibArchive on CMake >= 3.17.
+find_package(LibArchive CONFIG QUIET)
+if(NOT LibArchive_FOUND)
+    find_package(LibArchive REQUIRED)
+endif()
+
 enable_testing()
 add_subdirectory(src)
 add_subdirectory(apps/cli)
@@ -42,3 +59,7 @@ add_dependencies(raylidar_smoke raylidar_shaders)
 
 add_test(NAME vulkan_smoke COMMAND raylidar_smoke "${SHADER_BINARY_DIR}/Smoke.spv")
 set_tests_properties(vulkan_smoke PROPERTIES TIMEOUT 30 LABELS gpu)
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
