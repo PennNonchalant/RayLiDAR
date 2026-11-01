@@ -52,9 +52,9 @@ public:
     }
 
     [[nodiscard]]
-    const UniqueVmaAllocator &Allocator() const noexcept
+    VmaAllocator Allocator() const noexcept
     {
-        return m_allocator;
+        return m_allocator.get();
     }
 
     [[nodiscard]]

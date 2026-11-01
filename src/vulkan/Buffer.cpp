@@ -88,7 +88,7 @@ void Buffer::Initialize(const VulkanContext &context, const BufferDescription &d
         throw std::invalid_argument("Unsupported buffer memory usage.");
     }
 
-    const VmaAllocator allocator = context.Allocator().get();
+    const VmaAllocator allocator = context.Allocator();
 
     VkBuffer buffer{};
     VmaAllocation allocation = nullptr;
