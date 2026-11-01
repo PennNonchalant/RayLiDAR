@@ -45,7 +45,7 @@ raylidar_add_shaders(raylidar_shaders "${SHADER_SOURCE_DIR}" "${SHADER_BINARY_DI
 
 add_test(
     NAME vulkan_context_smoke
-    COMMAND raylidar_smoke
+    COMMAND raylidar_smoke "${SHADER_BINARY_DIR}/Smoke.spv"
 )
 
 set_tests_properties(vulkan_context_smoke PROPERTIES

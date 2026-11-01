@@ -2,6 +2,8 @@ add_library(raylidar_vulkan STATIC
     Vma.cpp
     VulkanContext.cpp
     Buffer.cpp
+    Shader.cpp
+    ComputePipeline.cpp
 )
 
 target_compile_features(raylidar_vulkan PUBLIC cxx_std_20)

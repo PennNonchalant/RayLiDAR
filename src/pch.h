@@ -17,6 +17,8 @@
 #include <span>
 #include <bit>
 #include <cassert>
+#include <filesystem>
+#include <fstream>
 
 #include <vulkan/vulkan_raii.hpp>
 #include <vulkan/vulkan.hpp>

@@ -1,5 +1,7 @@
 #include "vulkan/VulkanContext.h"
 #include "vulkan/Buffer.h"
+#include "vulkan/ComputePipeline.h"
+#include "vulkan/Shader.h"
 
 #include <cstdint>
 #include <exception>
@@ -10,10 +12,15 @@
 #include <span>
 #include <utility>
 
-int main()
+int main(int argc, char *argv[])
 {
     try
     {
+        if (argc != 2)
+        {
+            throw std::invalid_argument("Usage: raylidar_smoke <shader.spv>");
+        }
+
         {
             raylidar::vulkan::ContextDescription description;
             description.ApplicationName = "RayLiDAR Context Smoke";
@@ -75,6 +82,18 @@ int main()
 
             std::cout << "Buffer creation, write, move, and destruction completed.\n";
 
+            {
+                const raylidar::vulkan::Shader shader(context, argv[1]);
+                const raylidar::vulkan::ComputePipeline pipeline(context, shader);
+
+                if (!shader.Handle() || !pipeline.Handle() || !pipeline.Layout())
+                {
+                    throw std::runtime_error("Shader or compute pipeline initialization failed.");
+                }
+            }
+
+            std::cout << "Shader and compute pipeline creation and destruction completed.\n";
+
             context.WaitIdle();
         }
 
@@ -84,7 +103,7 @@ int main()
     }
     catch (const std::exception &exception)
     {
-        std::cerr << "Context smoke failed: " << exception.what() << '\n';
+        std::cerr << "Vulkan smoke failed: " << exception.what() << '\n';
         return 1;
     }
 }

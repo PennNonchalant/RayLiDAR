@@ -27,7 +27,7 @@ struct BufferDescription
 
 class Buffer
 {
-public:
+  public:
     Buffer(const VulkanContext &context, const BufferDescription &description);
     ~Buffer() noexcept;
 
@@ -61,7 +61,7 @@ public:
     void Write(std::span<const std::byte> data, vk::DeviceSize offset = 0);
     void Read(std::span<std::byte> destination, vk::DeviceSize offset = 0) const;
 
-private:
+  private:
     void Initialize(const VulkanContext &context, const BufferDescription &description);
     void ValidateRange(std::size_t byteCount, vk::DeviceSize offset) const;
     void Release() noexcept;
