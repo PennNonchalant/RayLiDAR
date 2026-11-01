@@ -81,7 +81,8 @@ void ExpectIoError(const std::function<void()> &call, const std::string &needle)
     catch (const IoError &error)
     {
         CHECK(error.exitCode() == 4);
-        CHECK_MESSAGE(std::string(error.what()).find(needle) != std::string::npos, error.what());
+        INFO(error.what());
+        CHECK(std::string(error.what()).find(needle) != std::string::npos);
         return;
     }
     FAIL("expected raylidar::IoError");
@@ -289,13 +290,20 @@ TEST_CASE("gt_rays rejects a count above the cap or the file size", "[io][gt_ray
     const std::vector<std::uint8_t> valid = EncodeGtRays(std::span<const GtRayBytes>(&fixture, 1));
 
     {
+        // Above kMaxRecordCount: rejected from the header alone.
         auto bytes = valid;
         SetU32(bytes, 8, 0xFFFFFFFFU);
-        ExpectBytesRejected(root, bytes, "length");
+        ExpectBytesRejected(root, bytes, "count");
     }
     {
         auto bytes = valid;
         SetU32(bytes, 8, 300000000U);
         ExpectBytesRejected(root, bytes, "count");
+    }
+    {
+        // Within the cap but inconsistent with the actual file length.
+        auto bytes = valid;
+        SetU32(bytes, 8, 2U);
+        ExpectBytesRejected(root, bytes, "length");
     }
 }

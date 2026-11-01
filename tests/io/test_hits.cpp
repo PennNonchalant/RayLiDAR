@@ -92,7 +92,8 @@ void ExpectIoError(const std::function<void()> &call, const std::string &needle)
     catch (const IoError &error)
     {
         CHECK(error.exitCode() == 4);
-        CHECK_MESSAGE(std::string(error.what()).find(needle) != std::string::npos, error.what());
+        INFO(error.what());
+        CHECK(std::string(error.what()).find(needle) != std::string::npos);
         return;
     }
     FAIL("expected raylidar::IoError");
@@ -261,14 +262,20 @@ TEST_CASE("hits rejects a count above the cap or the file size", "[io][hits][sim
         auto bytes = valid;
         SetU32(bytes, 8, 0xFFFFFFFFU);
         const fs::path path = WriteTempFile(root, "huge.hits", bytes);
-        // 0xFFFFFFFF * 24 + 32 fits in uint64 but exceeds the file size.
-        ExpectIoError([&path] { (void)ReadHits(path); }, "length");
+        ExpectIoError([&path] { (void)ReadHits(path); }, "count");
     }
     {
         auto bytes = valid;
         SetU32(bytes, 8, 300000000U);
         const fs::path path = WriteTempFile(root, "cap.hits", bytes);
         ExpectIoError([&path] { (void)ReadHits(path); }, "count");
+    }
+    {
+        // Within the cap but inconsistent with the actual file length.
+        auto bytes = valid;
+        SetU32(bytes, 8, 2U);
+        const fs::path path = WriteTempFile(root, "short.hits", bytes);
+        ExpectIoError([&path] { (void)ReadHits(path); }, "length");
     }
 }
 
