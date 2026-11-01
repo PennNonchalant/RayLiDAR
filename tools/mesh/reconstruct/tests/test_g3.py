@@ -73,6 +73,8 @@ def write_gt_frame(
     frame: int,
     points: np.ndarray,
     *,
+    camera: int | np.ndarray = 0,
+    valid: int | np.ndarray = 1,
     magic: bytes = b"RLGT",
     record_size: int = 32,
     length_override: int | None = None,
@@ -85,7 +87,8 @@ def write_gt_frame(
     records = np.zeros(points.shape[0], dtype=GT_DTYPE)
     records["p_L"] = points
     records["frame"] = np.uint32(frame)
-    records["valid"] = 1
+    records["camera"] = camera
+    records["valid"] = valid
     payload = bytes(header) + records.tobytes()
     if length_override is not None:
         payload = payload[:length_override]
@@ -197,19 +200,69 @@ def cube_with_duplicate_face() -> tuple[np.ndarray, np.ndarray]:
 # --------------------------------------------------------------------------- #
 
 
-def test_bbox_check_passes_on_matching_extent() -> None:
+def test_bbox_check_passes_on_matching_footprint() -> None:
     check = g3.bbox_check([0, 0, 0], [10, 20, 30], [0, 0, 0], [10, 20, 30])
 
     assert check["pass"] is True
-    assert check["measured"]["ratio"] == [1.0, 1.0, 1.0]
+    assert check["measured"]["ratio"] == [1.0, 1.0]
+    assert check["measured"]["axes"] == ["x", "y"]
+    assert check["measured"]["height_band"]["overlap"] is True
 
 
 def test_bbox_check_fails_when_mesh_is_1_5x_too_large() -> None:
     check = g3.bbox_check([0, 0, 0], [15, 30, 45], [0, 0, 0], [10, 20, 30])
 
     assert check["pass"] is False
-    assert check["measured"]["ratio"] == [1.5, 1.5, 1.5]
+    assert check["measured"]["ratio"] == [1.5, 1.5]
     assert "outside" in check["reason"]
+
+
+def test_bbox_check_fails_when_mesh_z_is_below_the_band() -> None:
+    # x/y match; mesh z min 90 is below gt z min 100 - 5 m.
+    check = g3.bbox_check(
+        [0, 0, 90], [10, 20, 110], [0, 0, 100], [10, 20, 110]
+    )
+
+    assert check["pass"] is False
+    assert check["measured"]["ratio"] == [1.0, 1.0]
+    assert check["measured"]["height_band"]["z_min_ok"] is False
+    assert "z band" in check["reason"]
+
+
+def test_bbox_check_fails_when_mesh_z_is_above_the_band() -> None:
+    # x/y match; mesh z max 140 is above gt z max 110 + 20 m.
+    check = g3.bbox_check(
+        [0, 0, 100], [10, 20, 140], [0, 0, 100], [10, 20, 110]
+    )
+
+    assert check["pass"] is False
+    assert check["measured"]["ratio"] == [1.0, 1.0]
+    assert check["measured"]["height_band"]["z_max_ok"] is False
+    assert "z band" in check["reason"]
+
+
+def test_bbox_check_fails_when_z_ranges_do_not_overlap() -> None:
+    # Inside both margins but entirely below the GT surface.
+    check = g3.bbox_check(
+        [0, 0, 96], [10, 20, 99], [0, 0, 100], [10, 20, 110]
+    )
+
+    assert check["pass"] is False
+    assert check["measured"]["height_band"]["overlap"] is False
+    assert "does not overlap" in check["reason"]
+
+
+def test_bbox_check_passes_within_the_z_band_margins() -> None:
+    # Facades/vegetation may rise 18 m above the LiDAR-visible surface.
+    check = g3.bbox_check(
+        [0, 0, 96], [10, 20, 128], [0, 0, 100], [10, 20, 110]
+    )
+
+    assert check["pass"] is True
+    band = check["measured"]["height_band"]
+    assert band["z_min_ok"] is True
+    assert band["z_max_ok"] is True
+    assert band["overlap"] is True
 
 
 # --------------------------------------------------------------------------- #
@@ -240,6 +293,44 @@ def test_gt_extent_transforms_p_L_with_t_W_V(tmp_path: Path) -> None:
         expected.append(samples @ transform[:3, :3].T + transform[:3, 3])
     expected_points = np.vstack(expected)
     assert count == 1_200_000
+    np.testing.assert_allclose(minimum, expected_points.min(axis=0), atol=1e-4)
+    np.testing.assert_allclose(maximum, expected_points.max(axis=0), atol=1e-4)
+
+
+def test_gt_extent_uses_only_camera_visible_points(tmp_path: Path) -> None:
+    bundle = cameras.load_bundle(make_bundle(tmp_path / "bundle"))
+    artifacts = tmp_path / "artifacts"
+    samples = np.asarray(
+        [[0.0, 0.0, 0.0], [10.0, 20.0, 30.0], [-5.0, 7.0, 2.0]], dtype=np.float64
+    )
+    visible_per_frame = 550_000
+    hidden_per_frame = 50_000
+    hidden = np.asarray([1_000_000.0, 1_000_000.0, 1_000_000.0])
+    for target in (4615, 4616):
+        visible = np.tile(samples, (visible_per_frame // samples.shape[0] + 1, 1))[
+            :visible_per_frame
+        ]
+        points = np.vstack([visible, np.tile(hidden, (hidden_per_frame, 1))])
+        camera = np.zeros(points.shape[0], dtype=np.uint8)
+        camera[-hidden_per_frame:] = 255
+        write_gt_frame(
+            artifacts / "02" / "gt" / f"frame_{target:010d}.bin",
+            target,
+            points,
+            camera=camera,
+        )
+
+    minimum, maximum, count = g3.gt_extent(
+        bundle, [4615, 4616], artifacts_root=artifacts
+    )
+
+    expected = []
+    for target in (4615, 4616):
+        transform = cameras.T_W_V(bundle, target)
+        expected.append(visible @ transform[:3, :3].T + transform[:3, 3])
+    expected_points = np.vstack(expected)
+    assert count == 1_100_000
+    assert maximum[0] < 1_000_000.0
     np.testing.assert_allclose(minimum, expected_points.min(axis=0), atol=1e-4)
     np.testing.assert_allclose(maximum, expected_points.max(axis=0), atol=1e-4)
 
@@ -281,7 +372,7 @@ def test_gt_decoder_rejects_bad_magic_and_length(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_camera_outside_forward_hit_rate_is_one_on_a_covering_plane(
+def test_camera_outside_forward_rate_one_passes_without_an_upper_bound(
     tmp_path: Path,
 ) -> None:
     bundle = cameras.load_bundle(make_bundle(tmp_path / "bundle"))
@@ -299,8 +390,8 @@ def test_camera_outside_forward_hit_rate_is_one_on_a_covering_plane(
     assert result["forward_hit_rate"] == pytest.approx(1.0)
     assert result["near_hits"] == []
     check = g3.camera_outside_check(result)
-    assert check["pass"] is False
-    assert "forward hit rate" in check["reason"]
+    assert check["pass"] is True
+    assert check["reason"] == ""
 
 
 def test_camera_outside_near_hit_fails(tmp_path: Path) -> None:
@@ -320,12 +411,12 @@ def test_camera_outside_near_hit_fails(tmp_path: Path) -> None:
     assert g3.camera_outside_check(result)["pass"] is False
 
 
-def test_camera_outside_partial_coverage_passes_the_hit_rate_band(
+def test_camera_outside_partial_coverage_above_the_lower_bound_passes(
     tmp_path: Path,
 ) -> None:
     bundle = cameras.load_bundle(make_bundle(tmp_path / "bundle"))
     # Cameras sit at x = 4615..4624; the plane stops at x = 4620 so the
-    # forward rate is a strict fraction inside [0.3, 0.9], and no ray is near.
+    # forward rate is a strict fraction above 0.3, and no ray is near.
     plane = write_plane(
         tmp_path / "partial.ply",
         z=12.0,
@@ -336,9 +427,29 @@ def test_camera_outside_partial_coverage_passes_the_hit_rate_band(
     result = g3.camera_outside(plane, bundle, SMOKE)
     check = g3.camera_outside_check(result)
 
-    assert g3.FORWARD_HIT_RATE_MIN <= result["forward_hit_rate"] <= g3.FORWARD_HIT_RATE_MAX
+    assert result["forward_hit_rate"] >= g3.FORWARD_HIT_RATE_MIN
     assert result["near_hits"] == []
     assert check["pass"] is True
+
+
+def test_camera_outside_forward_rate_below_the_lower_bound_fails(
+    tmp_path: Path,
+) -> None:
+    bundle = cameras.load_bundle(make_bundle(tmp_path / "bundle"))
+    # Only frames 4615 and 4616 are covered: forward rate 0.2 < 0.3.
+    plane = write_plane(
+        tmp_path / "low_rate.ply",
+        z=12.0,
+        x_range=(4600.0, 4616.5),
+        y_range=(-40.0, 40.0),
+    )
+
+    result = g3.camera_outside(plane, bundle, SMOKE)
+    check = g3.camera_outside_check(result)
+
+    assert result["forward_hit_rate"] == pytest.approx(0.2)
+    assert check["pass"] is False
+    assert "forward hit rate" in check["reason"]
 
 
 # --------------------------------------------------------------------------- #
@@ -346,7 +457,7 @@ def test_camera_outside_partial_coverage_passes_the_hit_rate_band(
 # --------------------------------------------------------------------------- #
 
 
-def test_two_components_50_50_fail_the_95_percent_check() -> None:
+def test_two_components_50_50_fail_the_90_percent_check() -> None:
     vertices, faces = tetrahedra(offset=10.0)
     stats = cleanup.clean_mesh(vertices, faces, min_component_triangles=1)["stats"]
 
@@ -355,6 +466,11 @@ def test_two_components_50_50_fail_the_95_percent_check() -> None:
     check = g3.components_check(stats)
     assert check["pass"] is False
     assert "largest component" in check["reason"]
+
+
+def test_largest_component_threshold_is_0_90() -> None:
+    assert g3.components_check({"largest_component_fraction": 0.90})["pass"] is True
+    assert g3.components_check({"largest_component_fraction": 0.8999})["pass"] is False
 
 
 def test_duplicate_index_face_exceeds_the_degenerate_threshold() -> None:
@@ -443,8 +559,13 @@ def test_ray_decoder_rejects_non_unit_direction(tmp_path: Path) -> None:
 
 def test_camera_check_thresholds_are_frozen_constants() -> None:
     assert (g3.BBOX_RATIO_MIN, g3.BBOX_RATIO_MAX) == (0.8, 1.2)
-    assert (g3.FORWARD_HIT_RATE_MIN, g3.FORWARD_HIT_RATE_MAX) == (0.3, 0.9)
+    assert g3.BBOX_AXIS_NAMES == ("x", "y")
+    assert (g3.MESH_Z_MIN_MARGIN_M, g3.MESH_Z_MAX_MARGIN_M) == (5.0, 20.0)
+    assert g3.FORWARD_HIT_RATE_MIN == 0.3
+    assert not hasattr(g3, "FORWARD_HIT_RATE_MAX")
     assert g3.NEAR_HIT_MAX_M == 1.5
-    assert g3.LARGEST_COMPONENT_MIN == 0.95
+    assert g3.LARGEST_COMPONENT_MIN == 0.90
     assert g3.DEGENERATE_FRACTION_MAX == 0.001
     assert g3.SMOKE_MEDIAN_ERROR_MAX_M == 1.0
+    assert g3.GT_VISIBLE_CAMERA_MAX == 2
+    assert g3.G3_AMENDMENT_ID == "G3-AMEND-01"

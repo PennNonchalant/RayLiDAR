@@ -1,19 +1,27 @@
-"""G3: the Phase-4 mesh acceptance gate (RECON-05, D-06…D-09).
+"""G3: the Phase-4 mesh acceptance gate (RECON-05, D-06…D-09, G3-AMEND-01).
 
 Five independent checks are computed from local artifacts only:
 
-1. ``bbox_ratio`` — per-axis mesh extent over the *full 60-frame* GT extent
-   (``artifacts/02/gt`` decoded read-only, transformed by ``T_W_V``);
+1. ``bbox_ratio`` — the x/y mesh footprint over the **camera-visible** GT
+   footprint (``camera < 2``, ``valid == 1``; ``artifacts/02/gt`` decoded
+   read-only, transformed by ``T_W_V``), plus a z sanity band that allows
+   facades/vegetation but rejects floating, underground or giant-spike meshes;
 2. ``camera_outside`` — from every full-window camera centre, five directions
    (camera ``+z`` forward, ±30° yaw, ±20° pitch) are cast at the mesh; the
-   forward hit rate must be in ``[0.3, 0.9]`` and no direction may hit closer
-   than ``1.5 m``;
+   forward hit rate must be ``>= 0.3`` and no direction may hit closer than
+   ``1.5 m``;
 3. ``components`` — welded-vertex connected components; the largest component
-   must own at least 95 % of the triangles;
+   must own at least 90 % of the triangles (G3-AMEND-01);
 4. ``degenerate`` — triangles with a repeated index or area below ``1e-12 m²``
    must stay below 0.1 %;
 5. ``smoke_range`` — the frozen rays of frames 4615–4624 are cast against the
    mesh and ``median |t_pred - t_gt|`` must stay below ``1.0 m``.
+
+G3-AMEND-01 was approved by the user on 2026-11-01 **before** this module was
+changed and before the existing artifacts were re-gated; the original failure
+evidence and the exact revised definitions are recorded in
+``.planning/phases/04-multi-route-mesh-reconstruction-g3/04-G3-AMENDMENT.md``.
+It is a post-hoc protocol amendment, not a silent threshold relaxation.
 
 The evaluation artifacts are opened *only* here and only for measurement.  This
 module contains no geometric correction, fitting, transform, or rescaling code:
@@ -54,14 +62,24 @@ SMOKE_MIN_HITS = 1_000
 SMOKE_FIRST_FRAME = 4615
 SMOKE_LAST_FRAME = 4624
 
+# G3-AMEND-01 (approved 2026-11-01): the GT surface is evaluated on the points
+# both rectified cameras can see.  ``camera`` is 0/1 for a rectified camera and
+# 255 for a return outside every camera frustum.
+GT_VISIBLE_CAMERA_MAX = 2
+BBOX_AXIS_NAMES = ("x", "y")
+MESH_Z_MIN_MARGIN_M = 5.0
+MESH_Z_MAX_MARGIN_M = 20.0
+
 BBOX_RATIO_MIN = 0.8
 BBOX_RATIO_MAX = 1.2
 FORWARD_HIT_RATE_MIN = 0.3
-FORWARD_HIT_RATE_MAX = 0.9
 NEAR_HIT_MAX_M = 1.5
-LARGEST_COMPONENT_MIN = 0.95
+LARGEST_COMPONENT_MIN = 0.90
 DEGENERATE_FRACTION_MAX = 0.001
 SMOKE_MEDIAN_ERROR_MAX_M = 1.0
+
+G3_AMENDMENT_ID = "G3-AMEND-01"
+G3_AMENDMENT_APPROVED_AT_UTC = "2026-11-01"
 
 RAY_T_MIN_M = 1e-4
 CAMERA_OUTSIDE_T_MAX_M = 200.0
@@ -274,8 +292,13 @@ def _cast_rays(
 
 def _read_gt_frame(
     path: Path, expected_frame: int
-) -> tuple[np.ndarray, int]:
-    """Decode one ``RLGT`` frame with the frozen header/record validation."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Decode one ``RLGT`` frame with the frozen header/record validation.
+
+    Returns ``(p_L, camera, valid, count)``.  ``camera`` is the per-record
+    camera id (0/1 for a rectified camera, 255 when no camera sees the point);
+    ``valid`` is the frozen static-validity flag.
+    """
     raw = np.fromfile(path, dtype=np.uint8)
     if raw.size < _GT_HEADER_SIZE:
         raise G3Error(f"{path}: truncated RLGT header")
@@ -304,7 +327,9 @@ def _read_gt_frame(
     points = np.asarray(records["p_L"], dtype=np.float64)
     if not np.isfinite(points).all():
         raise G3Error(f"{path}: RLGT has non-finite coordinates")
-    return points, count
+    camera = np.asarray(records["camera"], dtype=np.int64)
+    valid = np.asarray(records["valid"], dtype=np.int64)
+    return points, camera, valid, count
 
 
 def _read_ray_frame(
@@ -380,10 +405,13 @@ def gt_extent(
     *,
     artifacts_root: str | Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    """Return the W-frame AABB of the frozen static GT points (read-only).
+    """Return the W-frame AABB of the camera-visible static GT points.
 
-    ``p_W = T_W_V(frame) @ p_L`` for every point in every requested frame.  The
-    result is used only to measure the mesh; no construction module calls this.
+    G3-AMEND-01: only records with ``camera < GT_VISIBLE_CAMERA_MAX`` and
+    ``valid == 1`` contribute.  ``p_W = T_W_V(frame) @ p_L`` for every visible
+    point in every requested frame.  The returned ``total`` is the visible
+    count.  The result is used only to measure the mesh; no construction module
+    calls this.
     """
     requested = [int(frame) for frame in frames]
     if not requested:
@@ -398,17 +426,25 @@ def gt_extent(
         path = root / f"frame_{frame:010d}.bin"
         if not path.is_file():
             raise G3Error(f"missing frozen GT frame: {path}")
-        p_L, count = _read_gt_frame(path, frame)
+        p_L, camera, valid, _count = _read_gt_frame(path, frame)
+        visible = (camera < GT_VISIBLE_CAMERA_MAX) & (valid == 1)
+        visible_count = int(np.count_nonzero(visible))
+        if visible_count == 0:
+            raise G3Error(
+                f"{path}: no camera-visible static GT points "
+                f"(camera < {GT_VISIBLE_CAMERA_MAX} and valid == 1)"
+            )
         T_W_V = cameras.T_W_V(bundle, frame)
-        p_W = p_L @ T_W_V[:3, :3].T + T_W_V[:3, 3]
+        p_W = p_L[visible] @ T_W_V[:3, :3].T + T_W_V[:3, 3]
         minimum = np.minimum(minimum, p_W.min(axis=0))
         maximum = np.maximum(maximum, p_W.max(axis=0))
-        per_frame[frame] = count
-        total += count
+        per_frame[frame] = visible_count
+        total += visible_count
 
     if total <= GT_MIN_POINTS:
         raise G3Error(
-            f"GT extent needs more than {GT_MIN_POINTS} points, got {total}"
+            f"GT extent needs more than {GT_MIN_POINTS} camera-visible points, "
+            f"got {total}"
         )
     return minimum, maximum, total
 
@@ -621,15 +657,19 @@ def _bbox_ratios(
     mesh_max: Sequence[float],
     gt_min: Sequence[float],
     gt_max: Sequence[float],
-) -> list[float]:
+) -> list[float | None]:
+    """Return the x/y mesh-over-GT footprint ratios (``None`` if undefined)."""
     mesh_extent = np.asarray(mesh_max, dtype=np.float64) - np.asarray(
         mesh_min, dtype=np.float64
     )
-    gt_extent = np.asarray(gt_max, dtype=np.float64) - np.asarray(gt_min, dtype=np.float64)
-    ratios: list[float] = []
-    for axis in range(3):
-        if gt_extent[axis] <= 0.0:
-            ratios.append(float("inf"))
+    gt_extent = np.asarray(gt_max, dtype=np.float64) - np.asarray(
+        gt_min, dtype=np.float64
+    )
+    ratios: list[float | None] = []
+    for name in BBOX_AXIS_NAMES:
+        axis = "xyz".index(name)
+        if not math.isfinite(float(gt_extent[axis])) or gt_extent[axis] <= 0.0:
+            ratios.append(None)
         else:
             ratios.append(float(mesh_extent[axis] / gt_extent[axis]))
     return ratios
@@ -641,41 +681,99 @@ def bbox_check(
     gt_min: Sequence[float],
     gt_max: Sequence[float],
 ) -> dict[str, Any]:
-    """Per-axis mesh/GT extent ratio must stay in ``[0.8, 1.2]``."""
-    raw = _bbox_ratios(mesh_min, mesh_max, gt_min, gt_max)
-    ratios: list[float | None] = [
-        value if math.isfinite(value) else None for value in raw
-    ]
-    passed = all(
+    """x/y footprint ratio in ``[0.8, 1.2]`` plus a z sanity band.
+
+    G3-AMEND-01: the z axis is not compared as an extent ratio.  Instead the
+    mesh z range must stay inside the documented margins around the GT z range
+    and must overlap it.
+    """
+    ratios = _bbox_ratios(mesh_min, mesh_max, gt_min, gt_max)
+    ratio_ok = all(
         value is not None and BBOX_RATIO_MIN <= value <= BBOX_RATIO_MAX
         for value in ratios
     )
-    reason = ""
-    if not passed:
+
+    mesh_z_min = float(mesh_min[2])
+    mesh_z_max = float(mesh_max[2])
+    gt_z_min = float(gt_min[2])
+    gt_z_max = float(gt_max[2])
+    z_min_ok = mesh_z_min >= gt_z_min - MESH_Z_MIN_MARGIN_M
+    z_max_ok = mesh_z_max <= gt_z_max + MESH_Z_MAX_MARGIN_M
+    overlap = mesh_z_min <= gt_z_max and gt_z_min <= mesh_z_max
+    z_ok = z_min_ok and z_max_ok and overlap
+    passed = ratio_ok and z_ok
+
+    reasons: list[str] = []
+    if not ratio_ok:
         rendered = [
-            "xyz"[axis] + "=" + ("NaN" if ratios[axis] is None else f"{ratios[axis]:.4f}")
-            for axis in range(3)
+            name + "=" + ("NaN" if value is None else f"{value:.4f}")
+            for name, value in zip(BBOX_AXIS_NAMES, ratios)
         ]
-        reason = "bbox ratio outside [0.8, 1.2]: " + ", ".join(rendered)
+        reasons.append(
+            f"bbox ratio outside [{BBOX_RATIO_MIN}, {BBOX_RATIO_MAX}]: "
+            + ", ".join(rendered)
+        )
+    if not z_ok:
+        z_reasons: list[str] = []
+        if not z_min_ok:
+            z_reasons.append(
+                f"mesh z min {mesh_z_min:.4f} < gt z min {gt_z_min:.4f} - "
+                f"{MESH_Z_MIN_MARGIN_M} m"
+            )
+        if not z_max_ok:
+            z_reasons.append(
+                f"mesh z max {mesh_z_max:.4f} > gt z max {gt_z_max:.4f} + "
+                f"{MESH_Z_MAX_MARGIN_M} m"
+            )
+        if not overlap:
+            z_reasons.append(
+                f"mesh z range [{mesh_z_min:.4f}, {mesh_z_max:.4f}] does not "
+                f"overlap gt z range [{gt_z_min:.4f}, {gt_z_max:.4f}]"
+            )
+        reasons.append("z band: " + "; ".join(z_reasons))
+
     return {
         "pass": bool(passed),
-        "measured": {"ratio": ratios, "axes": ["x", "y", "z"]},
-        "threshold": {"min": BBOX_RATIO_MIN, "max": BBOX_RATIO_MAX},
-        "reason": reason,
+        "measured": {
+            "ratio": ratios,
+            "axes": list(BBOX_AXIS_NAMES),
+            "height_band": {
+                "mesh_z_min_m": mesh_z_min,
+                "mesh_z_max_m": mesh_z_max,
+                "gt_z_min_m": gt_z_min,
+                "gt_z_max_m": gt_z_max,
+                "z_min_margin_m": MESH_Z_MIN_MARGIN_M,
+                "z_max_margin_m": MESH_Z_MAX_MARGIN_M,
+                "z_min_ok": bool(z_min_ok),
+                "z_max_ok": bool(z_max_ok),
+                "overlap": bool(overlap),
+            },
+        },
+        "threshold": {
+            "min": BBOX_RATIO_MIN,
+            "max": BBOX_RATIO_MAX,
+            "axes": list(BBOX_AXIS_NAMES),
+            "z_min_margin_m": MESH_Z_MIN_MARGIN_M,
+            "z_max_margin_m": MESH_Z_MAX_MARGIN_M,
+        },
+        "reason": "; ".join(reasons),
     }
 
 
 def camera_outside_check(camera_metrics: Mapping[str, Any]) -> dict[str, Any]:
-    """Forward hit rate in ``[0.3, 0.9]`` and no hit inside ``1.5 m``."""
+    """Forward hit rate ``>= 0.3`` and no hit inside ``1.5 m``.
+
+    G3-AMEND-01 removes the former 0.9 upper bound: a complete street mesh
+    should put mesh on every camera's forward axis.
+    """
     rate = float(camera_metrics.get("forward_hit_rate") or 0.0)
     near_hits = list(camera_metrics.get("near_hits") or [])
-    rate_ok = FORWARD_HIT_RATE_MIN <= rate <= FORWARD_HIT_RATE_MAX
+    rate_ok = rate >= FORWARD_HIT_RATE_MIN
     near_ok = not near_hits
     reasons: list[str] = []
     if not rate_ok:
         reasons.append(
-            f"forward hit rate {rate:.4f} outside "
-            f"[{FORWARD_HIT_RATE_MIN}, {FORWARD_HIT_RATE_MAX}]"
+            f"forward hit rate {rate:.4f} < {FORWARD_HIT_RATE_MIN}"
         )
     if not near_ok:
         reasons.append(f"{len(near_hits)} near hit(s) within {NEAR_HIT_MAX_M} m")
@@ -688,7 +786,6 @@ def camera_outside_check(camera_metrics: Mapping[str, Any]) -> dict[str, Any]:
         },
         "threshold": {
             "forward_hit_rate_min": FORWARD_HIT_RATE_MIN,
-            "forward_hit_rate_max": FORWARD_HIT_RATE_MAX,
             "near_hit_max_m": NEAR_HIT_MAX_M,
         },
         "reason": "; ".join(reasons),
@@ -696,7 +793,7 @@ def camera_outside_check(camera_metrics: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def components_check(stats: Mapping[str, Any]) -> dict[str, Any]:
-    """Largest welded component must own at least 95 % of the triangles."""
+    """Largest welded component must own at least 90 % of the triangles."""
     fraction = float(stats.get("largest_component_fraction") or 0.0)
     passed = fraction >= LARGEST_COMPONENT_MIN
     return {
@@ -934,9 +1031,16 @@ def evaluate(
             "bbox_max_m": mesh_max,
         },
         "gt": {
+            "camera_visible": True,
+            "camera_visible_max": GT_VISIBLE_CAMERA_MAX,
             "point_count": int(gt_points),
             "min_m": [float(value) for value in gt_min],
             "max_m": [float(value) for value in gt_max],
+        },
+        "amendment": {
+            "id": G3_AMENDMENT_ID,
+            "approved_at_utc": G3_AMENDMENT_APPROVED_AT_UTC,
+            "camera_visible_gt": True,
         },
         "config_sha256": str(
             artifact.get("config_sha256") or config_sha256(dict(cfg))
@@ -947,14 +1051,17 @@ def evaluate(
         "thresholds": {
             "bbox_ratio_min": BBOX_RATIO_MIN,
             "bbox_ratio_max": BBOX_RATIO_MAX,
+            "bbox_axes": list(BBOX_AXIS_NAMES),
+            "mesh_z_min_margin_m": MESH_Z_MIN_MARGIN_M,
+            "mesh_z_max_margin_m": MESH_Z_MAX_MARGIN_M,
             "forward_hit_rate_min": FORWARD_HIT_RATE_MIN,
-            "forward_hit_rate_max": FORWARD_HIT_RATE_MAX,
             "near_hit_max_m": NEAR_HIT_MAX_M,
             "largest_component_fraction_min": LARGEST_COMPONENT_MIN,
             "degenerate_fraction_max": DEGENERATE_FRACTION_MAX,
             "smoke_median_abs_error_m_max": SMOKE_MEDIAN_ERROR_MAX_M,
             "ray_t_min_m": RAY_T_MIN_M,
             "camera_outside_t_max_m": CAMERA_OUTSIDE_T_MAX_M,
+            "gt_visible_camera_max": GT_VISIBLE_CAMERA_MAX,
         },
         "checks": checks,
         "failures": [
@@ -987,18 +1094,23 @@ def evaluate(
 
 
 __all__ = [
+    "BBOX_AXIS_NAMES",
     "BBOX_RATIO_MAX",
     "BBOX_RATIO_MIN",
     "CAMERA_OUTSIDE_DIRECTIONS",
     "CAMERA_OUTSIDE_T_MAX_M",
     "DEGENERATE_FRACTION_MAX",
     "DEFAULT_ARTIFACTS_ROOT",
-    "FORWARD_HIT_RATE_MAX",
     "FORWARD_HIT_RATE_MIN",
+    "G3_AMENDMENT_APPROVED_AT_UTC",
+    "G3_AMENDMENT_ID",
     "G3Error",
     "GATE_EXIT_CODE",
     "GT_MIN_POINTS",
+    "GT_VISIBLE_CAMERA_MAX",
     "LARGEST_COMPONENT_MIN",
+    "MESH_Z_MAX_MARGIN_M",
+    "MESH_Z_MIN_MARGIN_M",
     "NEAR_HIT_MAX_M",
     "RAY_T_MIN_M",
     "SMOKE_MIN_HITS",

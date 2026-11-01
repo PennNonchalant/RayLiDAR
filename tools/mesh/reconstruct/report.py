@@ -208,6 +208,20 @@ def _check_metric(route: Mapping[str, Any], name: str, key: str) -> Any:
     return measured.get(key)
 
 
+def _z_band_state(route: Mapping[str, Any]) -> str:
+    """Render the G3-AMEND-01 z sanity band for one route."""
+    band = (
+        ((route.get("g3_checks") or {}).get("bbox_ratio_ok") or {}).get("measured")
+        or {}
+    ).get("height_band")
+    if not isinstance(band, dict):
+        return "-"
+    ok = bool(band.get("z_min_ok")) and bool(band.get("z_max_ok")) and bool(
+        band.get("overlap")
+    )
+    return "ok" if ok else "fail"
+
+
 def _ab_markdown(
     artifact: Mapping[str, Any],
     g3_report: Mapping[str, Any],
@@ -316,10 +330,10 @@ def _ab_markdown(
     lines.append("## G3 diagnostics (full window)")
     lines.append("")
     lines.append(
-        "| route | G3 | bbox ratio (x,y,z) | forward hit rate | near hits "
+        "| route | G3 | bbox ratio (x,y) | z band | forward hit rate | near hits "
         "| components ok | degenerate ok | smoke median (m) | failures |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for route in routes:
         ratio = _check_metric(route, "bbox_ratio_ok", "ratio")
         if isinstance(ratio, list):
@@ -337,6 +351,7 @@ def _ab_markdown(
                     _cell(route.get("route")),
                     _cell(route.get("g3_pass")),
                     _cell(ratio_text),
+                    _cell(_z_band_state(route)),
                     _cell(_check_metric(route, "camera_outside_ok", "forward_hit_rate")),
                     _cell(near),
                     _cell(((route.get("g3_checks") or {}).get("components_ok") or {}).get("pass")),
@@ -350,6 +365,18 @@ def _ab_markdown(
     lines.append("")
     lines.append("## Frozen G3 definitions")
     lines.append("")
+    amendment = g3_report.get("amendment") or {}
+    if amendment.get("id"):
+        lines.append(
+            f"- G3 amendment `{amendment.get('id')}` "
+            f"(approved {amendment.get('approved_at_utc') or '-'}): the GT extent "
+            "is the camera-visible static subset "
+            f"(`camera < {thresholds.get('gt_visible_camera_max', '-')}`); x/y "
+            "footprint plus a z sanity band; forward hit rate has a lower bound "
+            "only; the largest-component threshold is "
+            f"`{thresholds.get('largest_component_fraction_min', '-')}`."
+        )
+        lines.append("")
     lines.append("Camera-outside directions, camera frame (`+z` optical axis), D-07:")
     lines.append("")
     for name, direction in directions.items():
@@ -362,14 +389,17 @@ def _ab_markdown(
     for key in (
         "bbox_ratio_min",
         "bbox_ratio_max",
+        "bbox_axes",
+        "mesh_z_min_margin_m",
+        "mesh_z_max_margin_m",
         "forward_hit_rate_min",
-        "forward_hit_rate_max",
         "near_hit_max_m",
         "largest_component_fraction_min",
         "degenerate_fraction_max",
         "smoke_median_abs_error_m_max",
         "ray_t_min_m",
         "camera_outside_t_max_m",
+        "gt_visible_camera_max",
     ):
         if key in thresholds:
             lines.append(f"- `{key}` = {thresholds[key]}")

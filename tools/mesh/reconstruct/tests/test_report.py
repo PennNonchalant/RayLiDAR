@@ -23,20 +23,40 @@ def _checks() -> dict:
     return {
         "bbox_ratio_ok": {
             "pass": True,
-            "measured": {"ratio": [1.0, 1.0, 1.0]},
-            "threshold": {"min": 0.8, "max": 1.2},
+            "measured": {
+                "ratio": [1.0, 1.0],
+                "axes": ["x", "y"],
+                "height_band": {
+                    "mesh_z_min_m": 0.0,
+                    "mesh_z_max_m": 10.0,
+                    "gt_z_min_m": 0.0,
+                    "gt_z_max_m": 10.0,
+                    "z_min_margin_m": 5.0,
+                    "z_max_margin_m": 20.0,
+                    "z_min_ok": True,
+                    "z_max_ok": True,
+                    "overlap": True,
+                },
+            },
+            "threshold": {
+                "min": 0.8,
+                "max": 1.2,
+                "axes": ["x", "y"],
+                "z_min_margin_m": 5.0,
+                "z_max_margin_m": 20.0,
+            },
             "reason": "",
         },
         "camera_outside_ok": {
             "pass": True,
             "measured": {"forward_hit_rate": 0.6, "near_hit_count": 0},
-            "threshold": {"forward_hit_rate_min": 0.3, "forward_hit_rate_max": 0.9},
+            "threshold": {"forward_hit_rate_min": 0.3, "near_hit_max_m": 1.5},
             "reason": "",
         },
         "components_ok": {
             "pass": True,
             "measured": {"component_count": 1, "largest_component_fraction": 0.99},
-            "threshold": {"largest_component_fraction_min": 0.95},
+            "threshold": {"largest_component_fraction_min": 0.90},
             "reason": "",
         },
         "degenerate_ok": {
@@ -64,17 +84,25 @@ def _g3_report(passed: bool = True) -> dict:
         "smoke_range_frames": SMOKE,
         "checks": _checks(),
         "failures": [] if passed else ["components_ok"],
+        "amendment": {
+            "id": "G3-AMEND-01",
+            "approved_at_utc": "2026-11-01",
+            "camera_visible_gt": True,
+        },
         "thresholds": {
             "bbox_ratio_min": 0.8,
             "bbox_ratio_max": 1.2,
+            "bbox_axes": ["x", "y"],
+            "mesh_z_min_margin_m": 5.0,
+            "mesh_z_max_margin_m": 20.0,
             "forward_hit_rate_min": 0.3,
-            "forward_hit_rate_max": 0.9,
             "near_hit_max_m": 1.5,
-            "largest_component_fraction_min": 0.95,
+            "largest_component_fraction_min": 0.90,
             "degenerate_fraction_max": 0.001,
             "smoke_median_abs_error_m_max": 1.0,
             "ray_t_min_m": 1e-4,
             "camera_outside_t_max_m": 200.0,
+            "gt_visible_camera_max": 2,
         },
         "metrics": {
             "components": {"count": 1, "largest_component_fraction": 0.99},
@@ -169,8 +197,11 @@ def test_write_reports_every_d12_field_and_the_fallback_caveat(
         "forward hit rate",
         "near hits",
         "smoke median",
+        "z band",
     ):
         assert token in text, token
+    assert "G3-AMEND-01" in text
+    assert "camera-visible static subset" in text
     assert report.MESHER_COMPARISON_SENTENCE in text
     assert "What this does not show" in text
     assert written["handoff_path"] is not None
