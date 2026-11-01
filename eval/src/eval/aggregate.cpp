@@ -290,6 +290,36 @@ EvalReport EvaluateAll(const std::span<const RaySample> samples,
     EvalReport report;
     report.micro_primary = AggregateCell(primarySamples, primaryRaw);
     report.micro_secondary = AggregateCell(secondarySamples, secondaryRaw);
+
+    // Pooled micro P/R/F and CD so the micro blocks serialize with the same
+    // cell/prf/cd shape as the per-row metrics.
+    {
+        const auto predicted = PredictedPoints(primarySamples);
+        const auto gt = GtPoints(primarySamples);
+        for (std::size_t tauIndex = 0; tauIndex < kTausM.size(); ++tauIndex)
+        {
+            report.micro_primary_prf[tauIndex].tau = kTausM[tauIndex];
+            report.micro_primary_prf[tauIndex].nearest =
+                ComputePrfMetrics(predicted, gt, kTausM[tauIndex], false);
+            report.micro_primary_prf[tauIndex].greedy =
+                ComputePrfMetrics(predicted, gt, kTausM[tauIndex], true);
+        }
+        report.micro_primary_cd = ComputeChamferMetrics(predicted, gt);
+    }
+    {
+        const auto predicted = PredictedPoints(secondarySamples);
+        const auto gt = GtPoints(secondarySamples);
+        for (std::size_t tauIndex = 0; tauIndex < kTausM.size(); ++tauIndex)
+        {
+            report.micro_secondary_prf[tauIndex].tau = kTausM[tauIndex];
+            report.micro_secondary_prf[tauIndex].nearest =
+                ComputePrfMetrics(predicted, gt, kTausM[tauIndex], false);
+            report.micro_secondary_prf[tauIndex].greedy =
+                ComputePrfMetrics(predicted, gt, kTausM[tauIndex], true);
+        }
+        report.micro_secondary_cd = ComputeChamferMetrics(predicted, gt);
+    }
+
     report.per_frame = AggregatePerFrame(samples, completeRaw);
     report.per_camera = AggregatePerCamera(samples);
     report.macro = SummarizeMacro(report.per_frame);

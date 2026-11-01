@@ -121,6 +121,13 @@ struct RAYLIDAR_EXPORT EvalReport
 {
     CellMetrics micro_primary;
     CellMetrics micro_secondary;
+    // Pooled micro P/R/F and CD, so the micro blocks serialize with the same
+    // cell/prf/cd shape as the per-row metrics. A default-constructed entry
+    // (`tau == 0`) means the micro block was not computed.
+    std::array<TauPrf, 3> micro_primary_prf{};
+    ChamferMetrics micro_primary_cd;
+    std::array<TauPrf, 3> micro_secondary_prf{};
+    ChamferMetrics micro_secondary_cd;
     std::vector<FrameMetrics> per_frame;
     std::vector<CameraMetrics> per_camera;
     MacroSummary macro;
