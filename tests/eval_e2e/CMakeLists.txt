@@ -2,9 +2,11 @@
 # contract, the deterministic placeholder scene, and the self-registered
 # `raylidar_cli eval` command. Uses the same `eval` label as the unit tests.
 add_executable(raylidar_test_eval_e2e
+    fixture.cpp
     test_output.cpp
     test_protocol_doc.cpp
-    test_scene.cpp)
+    test_scene.cpp
+    test_eval_cli.cpp)
 
 target_link_libraries(raylidar_test_eval_e2e PRIVATE
     raylidar::eval
