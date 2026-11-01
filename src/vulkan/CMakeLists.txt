@@ -4,6 +4,7 @@ add_library(raylidar_vulkan STATIC
     Buffer.cpp
     Shader.cpp
     ComputePipeline.cpp
+    DescriptorBindings.cpp
 )
 
 target_compile_features(raylidar_vulkan PUBLIC cxx_std_20)

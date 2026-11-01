@@ -1,5 +1,6 @@
 #include "vulkan/Buffer.h"
 #include "vulkan/ComputePipeline.h"
+#include "vulkan/DescriptorBindings.h"
 #include "vulkan/Shader.h"
 #include "vulkan/VulkanContext.h"
 
@@ -84,15 +85,42 @@ int main(int argc, char *argv[])
 
             {
                 const raylidar::vulkan::Shader shader(context, argv[1]);
-                const raylidar::vulkan::ComputePipeline pipeline(context, shader);
+
+                raylidar::vulkan::ComputePipelineDescription pipelineDescription;
+                pipelineDescription.DescriptorSets.resize(2);
+
+                for (auto &setDescription : pipelineDescription.DescriptorSets)
+                {
+                    setDescription.Bindings.emplace_back(0, vk::DescriptorType::eStorageBuffer, 1,
+                                                         vk::ShaderStageFlagBits::eCompute);
+                }
+
+                const raylidar::vulkan::ComputePipeline pipeline(context, shader, pipelineDescription);
 
                 if (!shader.Handle() || !pipeline.Handle() || !pipeline.Layout())
                 {
                     throw std::runtime_error("Shader or compute pipeline initialization failed.");
                 }
+
+                raylidar::vulkan::BufferDescription bufferDescription;
+                bufferDescription.Size = 16;
+                bufferDescription.Usage = vk::BufferUsageFlagBits::eStorageBuffer;
+
+                const raylidar::vulkan::Buffer buffer(context, bufferDescription);
+
+                raylidar::vulkan::DescriptorBindings bindings(context, pipeline);
+
+                if (bindings.Handles().size() != 2 || !bindings.Handle(0) || !bindings.Handle(1))
+                {
+                    throw std::runtime_error("Descriptor set initialization failed.");
+                }
+
+                bindings.WriteBuffer(0, 0, buffer);
+                bindings.WriteBuffer(1, 0, buffer);
             }
 
-            std::cout << "Shader and compute pipeline creation and destruction completed.\n";
+            std::cout << "Shader, compute pipeline, and descriptor bindings creation and destruction completed.\n"
+                      << "Two descriptor sets allocated and written.\n";
 
             context.WaitIdle();
         }
