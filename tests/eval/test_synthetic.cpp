@@ -218,15 +218,23 @@ TEST_CASE("EvaluateAll emits a complete frame x camera x bucket grid", "[eval][s
     samples.push_back(MakeSample(1U, 10U, 1U, 25.0, 25.1));
     samples.push_back(MakeSample(2U, 11U, 0U, 55.0, 55.1));
 
-    RawCounts frame10;
-    frame10.raw_total = 2U;
-    frame10.raw_bucket = {1U, 1U, 0U, 0U};
-    RawCounts frame11;
-    frame11.raw_total = 1U;
-    frame11.raw_bucket = {0U, 0U, 0U, 1U};
+    FrameRawCounts frame10;
+    frame10.frame = 10U;
+    frame10.raw.raw_total = 2U;
+    frame10.raw.raw_bucket = {1U, 1U, 0U, 0U};
+    // Per-camera raw denominators: one cast per camera in frame 10.
+    frame10.per_camera[0].raw_total = 1U;
+    frame10.per_camera[0].raw_bucket = {1U, 0U, 0U, 0U};
+    frame10.per_camera[1].raw_total = 1U;
+    frame10.per_camera[1].raw_bucket = {0U, 1U, 0U, 0U};
+    FrameRawCounts frame11;
+    frame11.frame = 11U;
+    frame11.raw.raw_total = 1U;
+    frame11.raw.raw_bucket = {0U, 0U, 0U, 1U};
+    frame11.per_camera[0].raw_total = 1U;
+    frame11.per_camera[0].raw_bucket = {0U, 0U, 0U, 1U};
 
-    const std::vector<FrameRawCounts> rawByFrame{FrameRawCounts{10U, frame10},
-                                                 FrameRawCounts{11U, frame11}};
+    const std::vector<FrameRawCounts> rawByFrame{frame10, frame11};
     const EvalReport report = EvaluateAll(samples, rawByFrame);
 
     REQUIRE(report.rows.size() == 16U);
@@ -253,10 +261,22 @@ TEST_CASE("EvaluateAll emits a complete frame x camera x bucket grid", "[eval][s
         {
             CHECK(row.cell.n_valid == 1U);
             CHECK(row.cell.n_hits == 1U);
+            CHECK(row.cell.n_raw == 1U);
+            REQUIRE(row.cell.coverage.has_value());
+            CHECK(*row.cell.coverage == Catch::Approx(1.0).margin(1.0e-12));
             REQUIRE(row.cd.cd_l1.has_value());
             CHECK(*row.cd.cd_l1 == Catch::Approx(0.1).margin(1.0e-12));
             REQUIRE(row.prf[1].nearest.f_score.has_value());
             CHECK(*row.prf[1].nearest.f_score == Catch::Approx(1.0).margin(1.0e-12));
+        }
+        if (row.frame == 10U && row.camera == 0U &&
+            row.bucket == raylidar::rays::Bucket::B20_40)
+        {
+            // A populated row and an empty row are distinguishable: the empty
+            // bucket has no raw denominator, so its coverage is an explicit null.
+            CHECK(row.cell.n_raw == 0U);
+            CHECK(row.cell.n_valid == 0U);
+            CHECK_FALSE(row.cell.coverage.has_value());
         }
         if (row.frame == 11U && row.camera == 1U &&
             row.bucket == raylidar::rays::Bucket::B50_60)
@@ -269,16 +289,18 @@ TEST_CASE("EvaluateAll emits a complete frame x camera x bucket grid", "[eval][s
         }
     }
 
-    // Primary micro excludes the 55 m secondary ray.
+    // Primary micro excludes the 55 m secondary ray but its denominator is every
+    // raw cast: frame 10 casts 2 + frame 11 casts 1 = 3 for 2 primary valid rays.
     REQUIRE(report.micro_primary.coverage.has_value());
     CHECK(report.micro_primary.n_valid == 2U);
-    CHECK(*report.micro_primary.coverage == Catch::Approx(1.0).margin(1.0e-12));
+    CHECK(report.micro_primary.n_raw == 3U);
+    CHECK(*report.micro_primary.coverage == Catch::Approx(2.0 / 3.0).margin(1.0e-12));
     REQUIRE(report.micro_secondary.coverage.has_value());
     CHECK(report.micro_secondary.n_valid == 1U);
     CHECK(*report.micro_secondary.coverage == Catch::Approx(1.0).margin(1.0e-12));
 
     RawCounts primaryRaw;
-    primaryRaw.raw_total = 2U;
+    primaryRaw.raw_total = 3U;
     primaryRaw.raw_bucket = {1U, 1U, 0U, 0U};
     const auto pooledPrimary = AggregateCell(
         std::span<const RaySample>(samples.data(), 2U), primaryRaw);
@@ -293,5 +315,46 @@ TEST_CASE("EvaluateAll emits a complete frame x camera x bucket grid", "[eval][s
     CHECK(*report.macro.precision_mean == Catch::Approx(1.0).margin(1.0e-12));
     CHECK_FALSE(report.macro.precision_std.has_value());
 
+    ScanReport(report);
+}
+
+TEST_CASE("coverage divides by every raw cast, not by surviving bucket hits",
+          "[eval][synthetic]")
+{
+    std::vector<RaySample> samples;
+    samples.push_back(MakeSample(0U, 10U, 0U, 10.0, 10.0));
+    samples.push_back(MakeSample(1U, 11U, 0U, 12.0, 12.0));
+
+    // Frame 10 casts two rays but only one produced a bucket hit; frame 11 casts
+    // one. The bucket-hit population is 2, the every-raw-cast population is 3.
+    RawCounts frame10;
+    frame10.raw_total = 2U;
+    frame10.raw_bucket = {1U, 0U, 0U, 0U};
+    RawCounts frame11;
+    frame11.raw_total = 1U;
+    frame11.raw_bucket = {1U, 0U, 0U, 0U};
+
+    const EvalReport report = EvaluateAll(
+        samples, {FrameRawCounts{10U, frame10}, FrameRawCounts{11U, frame11}});
+
+    REQUIRE(report.micro_primary.coverage.has_value());
+    CHECK(report.micro_primary.n_raw == 3U);
+    CHECK(report.micro_primary.n_valid == 2U);
+    CHECK(*report.micro_primary.coverage == Catch::Approx(2.0 / 3.0).margin(1.0e-12));
+
+    // Per-frame primary coverage uses that frame's raw_total as well.
+    REQUIRE(report.per_frame.size() == 2U);
+    REQUIRE(report.per_frame[0].primary.coverage.has_value());
+    CHECK(*report.per_frame[0].primary.coverage == Catch::Approx(0.5).margin(1.0e-12));
+    REQUIRE(report.per_frame[1].primary.coverage.has_value());
+    CHECK(*report.per_frame[1].primary.coverage == Catch::Approx(1.0).margin(1.0e-12));
+
+    // Bucket cells keep the pre-filter per-bucket population.
+    REQUIRE(report.per_frame[0].buckets[0].coverage.has_value());
+    CHECK(*report.per_frame[0].buckets[0].coverage == Catch::Approx(1.0).margin(1.0e-12));
+
+    // Macro coverage is the mean of the per-frame primary coverages.
+    REQUIRE(report.macro.coverage_mean.has_value());
+    CHECK(*report.macro.coverage_mean == Catch::Approx(0.75).margin(1.0e-12));
     ScanReport(report);
 }

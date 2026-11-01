@@ -119,3 +119,35 @@ TEST_CASE("per-camera results split by camera and carry coverage or null", "[eva
     CHECK(*perCamera[1].primary.range.mae == Catch::Approx(0.0).margin(0.0));
     CHECK_FALSE(perCamera[1].primary.coverage.has_value());
 }
+
+TEST_CASE("raw-aware per-camera aggregation defines coverage from raw_total",
+          "[eval][aggregate]")
+{
+    std::vector<RaySample> samples;
+    samples.push_back(MakeSample(0U, 0U, 0U, 5.0, 5.1));
+    samples.push_back(MakeSample(1U, 0U, 0U, 15.0, 15.1));
+    samples.push_back(MakeSample(2U, 0U, 1U, 20.0, 20.1));
+
+    FrameRawCounts frame;
+    frame.frame = 0U;
+    // Camera 0 cast three rays but only two produced a bucket hit.
+    frame.raw.per_camera[0].raw_total = 3U;
+    frame.raw.per_camera[0].raw_bucket = {2U, 0U, 0U, 0U};
+    frame.raw.per_camera[1].raw_total = 1U;
+    frame.raw.per_camera[1].raw_bucket = {0U, 1U, 0U, 0U};
+
+    const auto withRaw = AggregatePerCamera(samples, {frame});
+    REQUIRE(withRaw.size() == 2U);
+    REQUIRE(withRaw[0].primary.coverage.has_value());
+    CHECK(withRaw[0].primary.n_raw == 3U);
+    CHECK(*withRaw[0].primary.coverage == Catch::Approx(2.0 / 3.0).margin(1.0e-12));
+    REQUIRE(withRaw[1].primary.coverage.has_value());
+    CHECK(withRaw[1].primary.n_raw == 1U);
+    CHECK(*withRaw[1].primary.coverage == Catch::Approx(1.0).margin(1.0e-12));
+
+    // The old overload has no per-camera denominator and keeps the explicit null.
+    const auto withoutRaw = AggregatePerCamera(samples);
+    REQUIRE(withoutRaw.size() == 2U);
+    CHECK_FALSE(withoutRaw[0].primary.coverage.has_value());
+    CHECK_FALSE(withoutRaw[1].primary.coverage.has_value());
+}
