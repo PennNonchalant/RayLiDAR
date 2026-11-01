@@ -6,6 +6,7 @@
     "eigen3",
     "yaml-cpp",
     "nlohmann-json",
+    "nanoflann",
     "stb",
     "openssl",
     "libarchive",

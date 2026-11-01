@@ -14,6 +14,7 @@ Every port below was confirmed with `"$VCPKG_ROOT/vcpkg" search <port>` and its
 | `eigen3` | 5.0.1 | `find_package(Eigen3 CONFIG REQUIRED)` | `Eigen3::Eigen` |
 | `yaml-cpp` | 0.9.0#1 | `find_package(yaml-cpp CONFIG REQUIRED)` | `yaml-cpp::yaml-cpp` |
 | `nlohmann-json` | 3.12.0#2 | `find_package(nlohmann_json CONFIG REQUIRED)` | `nlohmann_json::nlohmann_json` |
+| `nanoflann` | 2.0.1 | `find_package(nanoflann CONFIG REQUIRED)` | `nanoflann::nanoflann` (header-only; only `eval` links it) |
 | `catch2` | 3.16.1 | `find_package(Catch2 3 CONFIG REQUIRED)` | `Catch2::Catch2WithMain` (tests only) |
 | `stb` | 2026-08-02 | `find_package(Stb REQUIRED)` (Find module) | `${Stb_INCLUDE_DIR}` header-only |
 | `openssl` | 3.6.5#2 | `find_package(OpenSSL REQUIRED)` | `OpenSSL::Crypto` (SHA-256) |
