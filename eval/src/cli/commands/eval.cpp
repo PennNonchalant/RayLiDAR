@@ -362,6 +362,7 @@ GeneratedArtifacts GenerateRays(const ProceduralScene &scene,
                                                             settings.gridHeight, hfovRad,
                                                             vfovRad);
                     ++raw.raw.raw_total;
+                    ++raw.per_camera[camera].raw_total;
                     const auto hit = raylidar::eval::RaycastScene(
                         scene, origin, direction, protocol.t_min_m, protocol.t_max_m);
                     if (!hit.has_value())
@@ -371,6 +372,7 @@ GeneratedArtifacts GenerateRays(const ProceduralScene &scene,
                     const raylidar::rays::Bucket bucket =
                         raylidar::rays::BucketOf(hit->t);
                     ++raw.raw.raw_bucket[static_cast<std::size_t>(bucket)];
+                    ++raw.per_camera[camera].raw_bucket[static_cast<std::size_t>(bucket)];
                     if (hit->t < protocol.r_min_m || hit->t > protocol.t_max_m)
                     {
                         continue;

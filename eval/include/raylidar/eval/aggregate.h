@@ -13,10 +13,15 @@
 namespace raylidar::eval
 {
 /// Per-frame raw denominators (all rays before the FOV/range/validity filters).
+///
+/// `raw` pools both cameras; `per_camera[0]`/`per_camera[1]` carry the same
+/// accounting for image_00/image_01 so per-camera and per-row coverage have a
+/// defined denominator.
 struct RAYLIDAR_EXPORT FrameRawCounts
 {
     std::uint32_t frame = 0;
     RawCounts raw;
+    std::array<RawCounts, 2> per_camera{};
 };
 
 /// One frame's primary cell plus its four buckets.
@@ -27,8 +32,9 @@ struct RAYLIDAR_EXPORT FrameMetrics
     std::array<CellMetrics, 4> buckets{};
 };
 
-/// One camera's primary result (coverage is `nullopt`: per-camera raw counts are
-/// not part of the frozen inputs).
+/// One camera's primary result. The raw-aware overload below sets coverage from
+/// the per-camera raw denominator; the one-argument overload leaves it
+/// `nullopt` because no denominator is available.
 struct RAYLIDAR_EXPORT CameraMetrics
 {
     std::uint16_t camera = 0;
@@ -86,8 +92,19 @@ AggregatePerFrame(std::span<const RaySample> samples,
                   const std::vector<FrameRawCounts> &rawByFrame);
 
 /// Per-camera primary cells for the cameras present, sorted by camera id.
+///
+/// Without raw denominators every camera's coverage is the explicit `nullopt`.
 RAYLIDAR_EXPORT std::vector<CameraMetrics>
 AggregatePerCamera(std::span<const RaySample> samples);
+
+/// Per-camera primary cells with coverage `n_valid / raw_total` for the camera.
+///
+/// The primary `n_raw` is the sum of `entry.per_camera[camera].raw_total` over
+/// frames, i.e. every raw cast by that camera (including misses and
+/// out-of-range hits). Coverage is `nullopt` only when that sum is zero.
+RAYLIDAR_EXPORT std::vector<CameraMetrics>
+AggregatePerCamera(std::span<const RaySample> samples,
+                   const std::vector<FrameRawCounts> &rawByFrame);
 
 /// Macro mean/sample-std over the per-frame primary cells.
 RAYLIDAR_EXPORT MacroSummary SummarizeMacro(std::span<const FrameMetrics> frames);
@@ -102,10 +119,10 @@ struct RAYLIDAR_EXPORT TauPrf
 
 /// One frame x camera x bucket row.
 ///
-/// `cell.n_raw == 0` means the raw denominator is unavailable at this row
-/// granularity (the frozen inputs carry per-frame, not per-camera, counts), so
-/// `cell.coverage` is `nullopt` even for a populated row. Every row still
-/// carries the explicit null.
+/// `cell.n_raw` is the per-camera pre-filter GT population for the bucket
+/// (`FrameRawCounts.per_camera[camera].raw_bucket[bucket]`), so a populated row
+/// has a defined `cell.coverage` and an empty bucket has `n_raw == 0` with an
+/// explicit `nullopt`. A real zero is never used as a null sentinel.
 struct RAYLIDAR_EXPORT RowMetrics
 {
     std::uint32_t frame = 0;

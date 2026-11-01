@@ -131,10 +131,10 @@ TEST_CASE("raw-aware per-camera aggregation defines coverage from raw_total",
     FrameRawCounts frame;
     frame.frame = 0U;
     // Camera 0 cast three rays but only two produced a bucket hit.
-    frame.raw.per_camera[0].raw_total = 3U;
-    frame.raw.per_camera[0].raw_bucket = {2U, 0U, 0U, 0U};
-    frame.raw.per_camera[1].raw_total = 1U;
-    frame.raw.per_camera[1].raw_bucket = {0U, 1U, 0U, 0U};
+    frame.per_camera[0].raw_total = 3U;
+    frame.per_camera[0].raw_bucket = {2U, 0U, 0U, 0U};
+    frame.per_camera[1].raw_total = 1U;
+    frame.per_camera[1].raw_bucket = {0U, 1U, 0U, 0U};
 
     const auto withRaw = AggregatePerCamera(samples, {frame});
     REQUIRE(withRaw.size() == 2U);

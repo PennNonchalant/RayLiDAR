@@ -142,17 +142,17 @@ std::vector<FrameMetrics> AggregatePerFrame(const std::span<const RaySample> sam
         std::vector<double> primaryErrors;
         std::uint64_t primaryValid = 0;
         std::uint64_t primaryHits = 0;
-        std::uint64_t primaryRaw = 0;
         for (std::size_t index = 0; index < 3U; ++index)
         {
             primaryValid += validByBucket[index];
             primaryHits += hitsByBucket[index];
-            primaryRaw += entry.raw.raw_bucket[index];
             primaryErrors.insert(primaryErrors.end(), errorsByBucket[index].begin(),
                                  errorsByBucket[index].end());
         }
-        frame.primary =
-            detail::MakeCell(primaryRaw, primaryValid, primaryHits, std::move(primaryErrors));
+        // The primary denominator is every raw cast in the frame (misses and
+        // out-of-range hits included), never the surviving bucket-hit sum.
+        frame.primary = detail::MakeCell(entry.raw.raw_total, primaryValid, primaryHits,
+                                         std::move(primaryErrors));
 
         for (std::size_t index = 0; index < 4U; ++index)
         {
@@ -192,10 +192,55 @@ std::vector<CameraMetrics> AggregatePerCamera(const std::span<const RaySample> s
     {
         CameraMetrics metrics;
         metrics.camera = camera;
-        // Per-camera raw denominators are not part of the frozen inputs, so the
-        // cell carries an explicit null coverage.
+        // No denominator was supplied, so the cell carries an explicit null.
         metrics.primary =
             detail::MakeCell(0U, valid, hitsByCamera[camera], std::move(errorsByCamera[camera]));
+        result.push_back(std::move(metrics));
+    }
+    return result;
+}
+
+std::vector<CameraMetrics> AggregatePerCamera(
+    const std::span<const RaySample> samples,
+    const std::vector<FrameRawCounts> &rawByFrame)
+{
+    std::map<std::uint16_t, std::uint64_t> rawByCamera;
+    for (const auto &entry : rawByFrame)
+    {
+        for (std::size_t camera = 0; camera < entry.per_camera.size(); ++camera)
+        {
+            rawByCamera[static_cast<std::uint16_t>(camera)] +=
+                entry.per_camera[camera].raw_total;
+        }
+    }
+
+    std::map<std::uint16_t, std::vector<double>> errorsByCamera;
+    std::map<std::uint16_t, std::uint64_t> validByCamera;
+    std::map<std::uint16_t, std::uint64_t> hitsByCamera;
+
+    for (const auto &sample : samples)
+    {
+        if (sample.bucket == rays::Bucket::B50_60)
+        {
+            continue; // primary aggregation only
+        }
+        ++validByCamera[sample.camera];
+        if (std::isfinite(sample.t_pred))
+        {
+            ++hitsByCamera[sample.camera];
+            errorsByCamera[sample.camera].push_back(sample.t_pred - sample.t_gt);
+        }
+    }
+
+    std::vector<CameraMetrics> result;
+    result.reserve(validByCamera.size());
+    for (auto &[camera, valid] : validByCamera)
+    {
+        CameraMetrics metrics;
+        metrics.camera = camera;
+        const std::uint64_t rawTotal = rawByCamera[camera];
+        metrics.primary = detail::MakeCell(rawTotal, valid, hitsByCamera[camera],
+                                           std::move(errorsByCamera[camera]));
         result.push_back(std::move(metrics));
     }
     return result;
@@ -242,21 +287,24 @@ EvalReport EvaluateAll(const std::span<const RaySample> samples,
     ValidateSamples(samples);
 
     // Frame set = supplied raw frames plus any frame observed in the samples.
-    std::map<std::uint32_t, RawCounts> frameRaw;
+    // Keep the whole FrameRawCounts so per-camera denominators survive.
+    std::map<std::uint32_t, FrameRawCounts> frameRaw;
     for (const auto &entry : rawByFrame)
     {
-        frameRaw[entry.frame] = entry.raw;
+        frameRaw[entry.frame] = entry;
     }
     for (const auto &sample : samples)
     {
-        frameRaw.try_emplace(sample.frame);
+        frameRaw.try_emplace(sample.frame, FrameRawCounts{sample.frame, RawCounts{}, {}});
     }
 
     std::vector<FrameRawCounts> completeRaw;
     completeRaw.reserve(frameRaw.size());
-    for (const auto &[frame, raw] : frameRaw)
+    for (const auto &[frame, entry] : frameRaw)
     {
-        completeRaw.push_back(FrameRawCounts{frame, raw});
+        FrameRawCounts complete = entry;
+        complete.frame = frame;
+        completeRaw.push_back(std::move(complete));
     }
 
     std::vector<RaySample> primarySamples;
@@ -276,13 +324,15 @@ EvalReport EvaluateAll(const std::span<const RaySample> samples,
 
     RawCounts primaryRaw;
     RawCounts secondaryRaw;
-    for (const auto &entry : rawByFrame)
+    for (const auto &entry : completeRaw)
     {
         for (std::size_t index = 0; index < 3U; ++index)
         {
             primaryRaw.raw_bucket[index] += entry.raw.raw_bucket[index];
-            primaryRaw.raw_total += entry.raw.raw_bucket[index];
         }
+        // Every raw cast is the primary denominator, including casts that hit
+        // nothing, hit out of range, or landed in the secondary bucket.
+        primaryRaw.raw_total += entry.raw.raw_total;
         secondaryRaw.raw_bucket[3] += entry.raw.raw_bucket[3];
         secondaryRaw.raw_total += entry.raw.raw_bucket[3];
     }
@@ -321,7 +371,7 @@ EvalReport EvaluateAll(const std::span<const RaySample> samples,
     }
 
     report.per_frame = AggregatePerFrame(samples, completeRaw);
-    report.per_camera = AggregatePerCamera(samples);
+    report.per_camera = AggregatePerCamera(samples, completeRaw);
     report.macro = SummarizeMacro(report.per_frame);
 
     // Extend the macro block with the per-frame primary-tau P/R/F.
@@ -384,9 +434,11 @@ EvalReport EvaluateAll(const std::span<const RaySample> samples,
                     }
                 }
 
-                // Per-camera raw denominators are not part of the frozen input,
-                // so the row carries an explicit null coverage.
-                row.cell = AggregateCell(rowSamples, RawCounts{});
+                // Row coverage is per-camera, per-bucket: N_valid_bucket /
+                // N_raw_bucket from the camera's pre-filter bucket population.
+                RawCounts rowRaw;
+                rowRaw.raw_total = entry.per_camera[camera].raw_bucket[bucketIndex];
+                row.cell = AggregateCell(rowSamples, rowRaw);
 
                 const auto predicted = PredictedPoints(rowSamples);
                 const auto gt = GtPoints(rowSamples);
