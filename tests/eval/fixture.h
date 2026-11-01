@@ -1,5 +1,7 @@
 #pragma once
 
+#include <raylidar/eval/types.h>
+
 #include <Eigen/Core>
 
 #include <cstddef>
@@ -32,4 +34,19 @@ double BruteNearestDistance(const std::vector<Eigen::Vector3d> &points,
 std::vector<std::pair<std::size_t, double>>
 BruteRadius(const std::vector<Eigen::Vector3d> &points, const Eigen::Vector3d &query,
             double radius);
+
+/// Build a valid `RaySample` with the bucket derived from `t_gt`.
+///
+/// `t_pred` defaults to `+inf` (a miss). The direction defaults to `+Z`; callers
+/// that need world-scale points pass an explicit origin/direction.
+raylidar::eval::RaySample MakeSample(std::uint64_t ray_id, std::uint32_t frame,
+                                     std::uint16_t camera, double t_gt, double t_pred,
+                                     const Eigen::Vector3d &origin = Eigen::Vector3d::Zero(),
+                                     const Eigen::Vector3d &dir =
+                                         Eigen::Vector3d(0.0, 0.0, 1.0));
+
+/// Identity prediction: `t_pred = t_gt`, so predicted points equal GT points.
+std::vector<raylidar::eval::RaySample>
+MakeIdentitySamples(const std::vector<double> &ranges, std::uint32_t frame = 0,
+                    std::uint16_t camera = 0);
 } // namespace raylidar::test
