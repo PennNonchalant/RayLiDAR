@@ -17,6 +17,7 @@ CONFIG="$ROOT/configs/phase2.yaml"
 PROTOCOL="$ROOT/configs/protocol.yaml"
 DECISIONS="$ROOT/docs/decisions.md"
 SIDECAR="$PHASE1/decisions.sha256"
+JOBS="${RAYLIDAR_JOBS:-$(nproc 2>/dev/null || echo 1)}"
 
 usage() {
   cat <<'EOF'
@@ -95,7 +96,8 @@ run "$CLI" frame-index \
 run "$CLI" segment-select \
   --config "$CONFIG" \
   --frame-index "$ARTS/streams/frame_index.json" \
-  --out-dir "$ARTS/segment"
+  --out-dir "$ARTS/segment" \
+  --jobs "$JOBS"
 
 # mask-build must run before uncurl-check: the uncurl diagnostic has no
 # unmasked fallback for real frames.
