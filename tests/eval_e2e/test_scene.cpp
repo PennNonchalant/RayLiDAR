@@ -108,7 +108,13 @@ TEST_CASE("RaycastSphere returns the near/exit/tangent root and rejects misses",
     CHECK_FALSE(RaycastSphere(Eigen::Vector3d(0.0, 2.0, -5.0), alongZ, center, 1.0, 1.0e-4,
                               60.0)
                     .has_value());
-    CHECK_FALSE(RaycastSphere(Eigen::Vector3d(0.0, 0.0, -5.0), alongZ, center, 1.0, 4.5,
+    // The near root (4) is before t_min, so the smallest root inside the
+    // segment is the exit root (6); past both roots there is no hit.
+    const auto exitAfterGuard =
+        RaycastSphere(Eigen::Vector3d(0.0, 0.0, -5.0), alongZ, center, 1.0, 4.5, 60.0);
+    REQUIRE(exitAfterGuard.has_value());
+    CHECK(*exitAfterGuard == Approx(6.0));
+    CHECK_FALSE(RaycastSphere(Eigen::Vector3d(0.0, 0.0, -5.0), alongZ, center, 1.0, 6.5,
                               60.0)
                     .has_value());
     CHECK_FALSE(RaycastSphere(Eigen::Vector3d(0.0, 0.0, -5.0), alongZ, center, 1.0, 1.0e-4,
@@ -135,7 +141,13 @@ TEST_CASE("RaycastAabb uses the slab method for entry/exit/inside/miss", "[eval]
     CHECK_FALSE(RaycastAabb(Eigen::Vector3d(2.0, 0.5, 0.5), Eigen::Vector3d(0.0, 1.0, 0.0),
                             boxMin, boxMax, 1.0e-4, 60.0)
                     .has_value());
-    CHECK_FALSE(RaycastAabb(Eigen::Vector3d(-1.0, 0.5, 0.5), alongX, boxMin, boxMax, 1.5, 60.0)
+    // The entry (1) is before t_min, so the exit (2) is the first surface in
+    // the segment; past the exit there is no hit.
+    const auto exitAfterGuard =
+        RaycastAabb(Eigen::Vector3d(-1.0, 0.5, 0.5), alongX, boxMin, boxMax, 1.5, 60.0);
+    REQUIRE(exitAfterGuard.has_value());
+    CHECK(*exitAfterGuard == Approx(2.0));
+    CHECK_FALSE(RaycastAabb(Eigen::Vector3d(-1.0, 0.5, 0.5), alongX, boxMin, boxMax, 2.5, 60.0)
                     .has_value());
     CHECK_FALSE(RaycastAabb(Eigen::Vector3d(-1.0, 0.5, 0.5), alongX, boxMin, boxMax, 1.0e-4,
                             0.5)
