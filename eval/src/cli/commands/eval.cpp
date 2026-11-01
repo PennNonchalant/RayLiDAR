@@ -574,6 +574,136 @@ void VerifySidecar(const fs::path &path)
 }
 
 // ---------------------------------------------------------------------------
+// Artifact re-hash validation (validate mode)
+// ---------------------------------------------------------------------------
+
+fs::path ResolveArtifactPath(const fs::path &outDir, const std::string &recorded,
+                             const std::string &where)
+{
+    const fs::path path(recorded);
+    if (path.is_absolute())
+    {
+        Fail(where + " must be relative to the metrics directory");
+    }
+    for (const auto &part : path)
+    {
+        if (part == "..")
+        {
+            Fail(where + " must not contain a '..' component");
+        }
+    }
+    return outDir / path;
+}
+
+void RequireMatchingHash(const fs::path &artifact, const std::string &expected,
+                         const std::string &where)
+{
+    std::error_code error;
+    if (!fs::is_regular_file(artifact, error))
+    {
+        Fail(where + " is missing or unreadable: " + artifact.string());
+    }
+    const std::string actual = raylidar::Sha256File(artifact);
+    if (actual != expected)
+    {
+        Fail(where + " does not match the recorded hash: " + artifact.string(),
+             kExitProtocolDrift);
+    }
+}
+
+std::string RequireManifestHash(const nlohmann::json &object, const char *key,
+                                const std::string &where)
+{
+    if (!object.is_object() || !object.contains(key) || !object.at(key).is_string())
+    {
+        Fail(where + " is missing a string '" + key + "'");
+    }
+    const std::string value = object.at(key).get<std::string>();
+    if (!IsSha256Hex(value))
+    {
+        Fail(where + "." + key + " is not a lowercase 64-hex SHA-256",
+             kExitProtocolDrift);
+    }
+    return value;
+}
+
+// Re-hash every recorded artifact in the metrics directory. The recorded
+// metrics hashes must agree with both the manifest entry and the file on disk;
+// a valid-hex value that disagrees with the artifact is exit 6, and a missing
+// manifest or artifact is exit 4.
+void ValidateArtifactHashes(const fs::path &metricsPath, const nlohmann::json &metrics)
+{
+    const fs::path outDir = metricsPath.parent_path();
+    const nlohmann::json &inputs = metrics.at("inputs");
+    const std::string raySha = RequireManifestHash(inputs, "ray_set_sha256",
+                                                   "metrics.json.inputs");
+    const std::string hitSha = RequireManifestHash(inputs, "hit_set_sha256",
+                                                   "metrics.json.inputs");
+    const std::string meshSha = RequireManifestHash(inputs, "mesh_sha256",
+                                                    "metrics.json.inputs");
+
+    const fs::path simIoPath = outDir / "sim_io_manifest.json";
+    const nlohmann::json simIo = raylidar::ReadJson(simIoPath);
+    if (!simIo.is_object() || !simIo.contains("entries") ||
+        !simIo.at("entries").is_array())
+    {
+        Fail("sim_io_manifest.json is missing an entries[] array");
+    }
+
+    bool sawRays = false;
+    bool sawHits = false;
+    const nlohmann::json &entries = simIo.at("entries");
+    for (std::size_t index = 0; index < entries.size(); ++index)
+    {
+        const std::string where =
+            "sim_io_manifest.json.entries[" + std::to_string(index) + "]";
+        const nlohmann::json &entry = entries[index];
+        if (!entry.is_object() || !entry.contains("path") ||
+            !entry.at("path").is_string())
+        {
+            Fail(where + " is missing a string 'path'");
+        }
+        const std::string kind =
+            entry.contains("kind") && entry.at("kind").is_string()
+                ? entry.at("kind").get<std::string>()
+                : std::string();
+        const std::string recorded =
+            RequireManifestHash(entry, "sha256", where);
+        const fs::path artifact =
+            ResolveArtifactPath(outDir, entry.at("path").get<std::string>(),
+                                where + ".path");
+
+        RequireMatchingHash(artifact, recorded, where);
+        if (kind == "gt_rays")
+        {
+            RequireMatchingHash(artifact, raySha, "metrics.json.inputs.ray_set_sha256");
+            sawRays = true;
+        }
+        else if (kind == "hits")
+        {
+            RequireMatchingHash(artifact, hitSha, "metrics.json.inputs.hit_set_sha256");
+            sawHits = true;
+        }
+        else
+        {
+            Fail(where + ".kind must be 'gt_rays' or 'hits'");
+        }
+    }
+    if (!sawRays || !sawHits)
+    {
+        Fail("sim_io_manifest.json must record both a gt_rays and a hits entry");
+    }
+
+    const fs::path sceneManifestPath = outDir / "scene_manifest.json";
+    const nlohmann::json sceneManifest = raylidar::ReadJson(sceneManifestPath);
+    const std::string sceneRecorded = RequireManifestHash(
+        sceneManifest, "sha256", "scene_manifest.json");
+    const fs::path scenePath = outDir / "scene.ply";
+    RequireMatchingHash(scenePath, sceneRecorded, "scene_manifest.json");
+    RequireMatchingHash(scenePath, meshSha, "metrics.json.inputs.mesh_sha256");
+}
+
+// ---------------------------------------------------------------------------
 // Modes
 // ---------------------------------------------------------------------------
 
@@ -789,6 +919,7 @@ int ExecuteValidate(const ParsedArgs &parsed)
     const nlohmann::json document = raylidar::ReadJson(metricsText);
     raylidar::eval::ValidateMetricsJson(document);
     raylidar::eval::ValidateMetricsCsv(csvText, document);
+    ValidateArtifactHashes(fs::path(metricsText), document);
     for (const char *key : {"protocol", "sim-io"})
     {
         const std::string sidecar = parsed.Get(key);
