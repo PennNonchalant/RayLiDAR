@@ -33,19 +33,47 @@ CheckOptions:
   readability-identifier-naming.TypeAliasCase: CamelCase
   readability-identifier-naming.TypedefCase: CamelCase
   readability-identifier-naming.TypeTemplateParameterCase: CamelCase
+  readability-identifier-naming.TemplateTemplateParameterCase: CamelCase
+  readability-identifier-naming.ValueTemplateParameterCase: camelBack
+  readability-identifier-naming.EnumConstantCase: CamelCase
+  readability-identifier-naming.NamespaceCase: lower_case
 
+  # Access, not struct/class spelling, determines instance-field naming.
+  # Leave ConstantMember and Constant unset: they override access rules.
   readability-identifier-naming.MemberCase: camelBack
   readability-identifier-naming.MemberPrefix: m_
-  readability-identifier-naming.ConstantMemberCase: camelBack
-  readability-identifier-naming.ConstantMemberPrefix: m_
-  readability-identifier-naming.ClassMemberCase: camelBack
-  readability-identifier-naming.ClassMemberPrefix: m_
-  readability-identifier-naming.ClassConstantCase: camelBack
-  readability-identifier-naming.ClassConstantPrefix: m_
+  readability-identifier-naming.PublicMemberCase: CamelCase
+  readability-identifier-naming.PublicMemberPrefix: ''
+  readability-identifier-naming.PrivateMemberCase: camelBack
+  readability-identifier-naming.PrivateMemberPrefix: m_
+  readability-identifier-naming.ProtectedMemberCase: camelBack
+  readability-identifier-naming.ProtectedMemberPrefix: m_
 
+  # Static data members use these rules regardless of access.
+  readability-identifier-naming.ClassMemberCase: camelBack
+  readability-identifier-naming.ClassMemberPrefix: s_
+  readability-identifier-naming.ClassConstantCase: CamelCase
+  readability-identifier-naming.ClassConstantPrefix: k
+
+  readability-identifier-naming.GlobalVariableCase: camelBack
+  readability-identifier-naming.GlobalVariablePrefix: g_
+  readability-identifier-naming.GlobalConstantCase: CamelCase
+  readability-identifier-naming.GlobalConstantPrefix: k
+
+  readability-identifier-naming.FunctionCase: CamelCase
   readability-identifier-naming.MethodCase: CamelCase
   readability-identifier-naming.ClassMethodCase: CamelCase
+  # Standard range customization names must retain their protocol spelling.
+  readability-identifier-naming.FunctionIgnoredRegexp: '^(begin|end|cbegin|cend|rbegin|rend|crbegin|crend)$'
+  readability-identifier-naming.MethodIgnoredRegexp: '^(begin|end|cbegin|cend|rbegin|rend|crbegin|crend)$'
+  readability-identifier-naming.ClassMethodIgnoredRegexp: '^(begin|end|cbegin|cend|rbegin|rend|crbegin|crend)$'
+
+  # Leave ConstexprVariable unset so constexpr follows its scope's const rule.
+  # Function-local statics also fall back to these local rules.
   readability-identifier-naming.LocalVariableCase: camelBack
   readability-identifier-naming.LocalConstantCase: camelBack
   readability-identifier-naming.ParameterCase: camelBack
   readability-identifier-naming.ParameterPackCase: camelBack
+
+  readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
+  readability-identifier-naming.MacroDefinitionPrefix: RAYLIDAR_
