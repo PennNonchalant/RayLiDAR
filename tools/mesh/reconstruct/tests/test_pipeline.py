@@ -32,11 +32,10 @@ def test_build_stage_resolves_to_the_route_builder() -> None:
     assert pipeline.load_stage("build") is routes.build
 
 
-def test_ingest_stage_is_unavailable_until_later_plans_land() -> None:
-    with pytest.raises(pipeline.StageUnavailable) as excinfo:
-        pipeline.load_stage("ingest")
+def test_ingest_stage_resolves_to_the_canonical_adapter() -> None:
+    from tools.mesh.reconstruct import ingest
 
-    assert "ingest" in str(excinfo.value)
+    assert pipeline.load_stage("ingest") is ingest.ingest
 
 
 def test_run_stage_requires_config_sha256(monkeypatch: pytest.MonkeyPatch) -> None:
