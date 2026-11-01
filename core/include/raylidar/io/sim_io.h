@@ -113,4 +113,42 @@ RAYLIDAR_EXPORT std::vector<Hit> ReadHits(const std::filesystem::path &path,
 /// `prim_id`). Every violation throws `IoError` (exit 4).
 RAYLIDAR_EXPORT void ValidateHitsAgainstRays(std::span<const GtRay> rays,
                                              std::span<const Hit> hits);
+
+/// The three mesh container formats frozen by `docs/sim-io.md`.
+enum class MeshFormat
+{
+    Ply,
+    Glb,
+    Obj
+};
+
+/// Structural description of a validated W-frame triangle mesh.
+struct RAYLIDAR_EXPORT MeshStats
+{
+    MeshFormat format = MeshFormat::Ply;
+    std::uint64_t vertex_count = 0;
+    std::uint64_t triangle_count = 0;
+    Eigen::Vector3d bbox_min = Eigen::Vector3d::Zero();
+    Eigen::Vector3d bbox_max = Eigen::Vector3d::Zero();
+    bool has_normals = false;
+    bool has_colors = false;
+    bool float64_positions = false;
+    std::string frame;
+    std::string units;
+};
+
+/// Resolve the mesh format from the file extension (`.ply`, `.glb`, `.obj`).
+///
+/// Throws `IoError` (exit 4) for an unknown extension.
+RAYLIDAR_EXPORT MeshFormat FormatFromExtension(const std::filesystem::path &path);
+
+/// Structurally validate a W-frame mesh and return its shape.
+///
+/// PLY must be binary little-endian with `comment frame W` and
+/// `comment units m`; GLB must be glTF 2.0 with W/metre extras, identity node
+/// transforms, and float32 POSITION accessors carrying `min`/`max`; OBJ must
+/// carry the two required comments and contain only triangle faces with
+/// positive 1-based indices. All three require at least one vertex and one
+/// triangle and finite coordinates. Every violation throws `IoError` (exit 4).
+RAYLIDAR_EXPORT MeshStats ValidateMeshFile(const std::filesystem::path &path);
 } // namespace raylidar::io
