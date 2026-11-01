@@ -170,3 +170,114 @@ def test_colmap_openmvs_rejects_metre_scale_error() -> None:
 
     with pytest.raises(colmap_openmvs.RouteError, match="exceeds"):
         colmap_openmvs.validate_mesh_envelope(stats, centers)
+
+
+# --------------------------------------------------------------------------- #
+# Open3D alpha-shape route
+# --------------------------------------------------------------------------- #
+
+
+def _write_ascii_points(path: Path, points: np.ndarray) -> Path:
+    lines = [
+        "ply",
+        "format ascii 1.0",
+        f"element vertex {points.shape[0]}",
+        "property float x",
+        "property float y",
+        "property float z",
+        "end_header",
+    ]
+    lines += [f"{x:.6f} {y:.6f} {z:.6f}" for x, y, z in points]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _cube_shell(half: float = 5.0, spacing: float = 0.1) -> np.ndarray:
+    axis = np.arange(-half, half + spacing / 2.0, spacing)
+    grid = np.stack(np.meshgrid(axis, axis, indexing="xy"), axis=-1).reshape(-1, 2)
+    faces = []
+    for value in (-half, half):
+        faces.append(np.column_stack([np.full(grid.shape[0], value), grid]))
+        faces.append(np.column_stack([grid[:, 0], np.full(grid.shape[0], value), grid[:, 1]]))
+        faces.append(np.column_stack([grid[:, 0], grid[:, 1], np.full(grid.shape[0], value)]))
+    return np.concatenate(faces, axis=0)
+
+
+def test_open3d_envelope_excludes_points_outside_camera_aabb() -> None:
+    centers = [[0.0, 0.0, 0.0], [10.0, 2.0, 0.0]]
+    low, high = open3d_alpha.camera_envelope(
+        centers, xy_m=60.0, z_range=(-10.0, 30.0)
+    )
+
+    points = np.asarray(
+        [
+            [5.0, 0.0, 0.0],  # inside
+            [100.0, 0.0, 0.0],  # outside x
+            [5.0, 0.0, 100.0],  # outside z
+        ]
+    )
+    keep = open3d_alpha.crop_mask(points, low, high)
+
+    assert keep.tolist() == [True, False, False]
+    assert low[0] == -60.0 and high[0] == 70.0
+    assert low[2] == -10.0 and high[2] == 30.0
+
+
+def test_open3d_route_requires_a_dense_cloud(tmp_path: Path) -> None:
+    cfg = _cfg()
+    cfg["route"] = "open3d_alpha"
+    route = open3d_alpha.Open3DAlpha(
+        cfg=cfg, env=_env(), camera_centers=[[0.0, 0.0, 0.0]]
+    )
+
+    with pytest.raises(open3d_alpha.RouteError, match="dense cloud"):
+        route.build(SMOKE, tmp_path, tmp_path / "missing.ply")
+
+
+def test_open3d_route_builds_nonempty_mesh_on_synthetic_cloud(tmp_path: Path) -> None:
+    cfg = _cfg()
+    cfg["route"] = "open3d_alpha"
+    cfg["params"]["open3d"]["voxel_smoke"] = 0.25
+    cfg["params"]["open3d"]["alpha_factor"] = 2.0
+
+    dense = _write_ascii_points(tmp_path / "dense.ply", _cube_shell())
+    route = open3d_alpha.Open3DAlpha(
+        cfg=cfg,
+        env=_env(),
+        camera_centers=[[0.0, 0.0, 0.0]] * len(SMOKE),
+        dense_result={"dense_backend": "colmap_cuda"},
+    )
+
+    output = route.build(SMOKE, tmp_path, dense)
+
+    assert output.mesh_path.is_file()
+    report = json.loads((tmp_path / "open3d" / "open3d_report.json").read_text())
+    assert report["gt_used_for_construction"] is False
+    assert report["mesh"]["triangle_count"] > 0
+    assert report["point_counts"]["input"] == 6 * 101 * 101
+    assert report["dense_cloud_source"] == "colmap_cuda"
+    assert report["params"]["alpha"] == pytest.approx(0.5)
+
+
+def test_open3d_route_records_the_openmvs_fallback_source(tmp_path: Path) -> None:
+    cfg = _cfg()
+    cfg["route"] = "open3d_alpha"
+    cfg["params"]["open3d"]["voxel_smoke"] = 0.25
+    cfg["params"]["open3d"]["alpha_factor"] = 2.0
+
+    dense = _write_ascii_points(tmp_path / "scene_dense.ply", _cube_shell())
+    route = open3d_alpha.Open3DAlpha(
+        cfg=cfg,
+        env=_env(),
+        camera_centers=[[0.0, 0.0, 0.0]] * len(SMOKE),
+        dense_result={
+            "dense_backend": "openmvs_densify",
+            "dense_cloud_source": "openmvs_densify",
+        },
+    )
+
+    route.build(SMOKE, tmp_path, dense)
+
+    report = json.loads((tmp_path / "open3d" / "open3d_report.json").read_text())
+    assert report["dense_cloud_source"] == "openmvs_densify"
+    assert report["gt_used_for_construction"] is False
