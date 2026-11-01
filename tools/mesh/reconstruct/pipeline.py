@@ -53,6 +53,7 @@ STAGE_CONTEXT_KEYS: dict[str, str | None] = {
 
 # Exactly the keys every stage may declare.
 CONTEXT_KEYS: tuple[str, ...] = (
+    "route_name",
     "bundle_root",
     "window_name",
     "frames",
@@ -158,6 +159,7 @@ def _build_context(
     frames = tuple(cfg["windows"][window])
     WindowSpec(window, frames)
     return {
+        "route_name": cfg["route"],
         "bundle_root": Path(cfg["bundle_root"]),
         "window_name": window,
         "frames": frames,

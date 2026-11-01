@@ -6,6 +6,7 @@
 #   bash scripts/phase4.sh --config-check --config <path>
 #   bash scripts/phase4.sh --stage <name> --window <smoke|full> --config <path>
 #   bash scripts/phase4.sh --dense-smoke --config <path>
+#   bash scripts/phase4.sh --route-smoke --route <name>|all [--config <path>]
 #   bash scripts/phase4.sh --smoke [--route <name>|all] --config <path>
 #   bash scripts/phase4.sh --full --route <name> --config <path>
 #   bash scripts/phase4.sh --verify-only --config <path> --run-id <id>
@@ -30,6 +31,7 @@ Modes:
   --config-check              load + hash a config (requires --config)
   --stage <name>              dispatch one pipeline stage
   --dense-smoke               run model + dense on the smoke window
+  --route-smoke               run one route (or all runnable routes, + A/B) on smoke
   --smoke [--route all]       run all six stages on the smoke window
   --full                      run all six stages on the full window
   --verify-only               re-hash a run and re-validate its canonical mesh
@@ -57,7 +59,7 @@ PYTEST_ARGS=()
 
 while (($#)); do
   case "$1" in
-    --env | --dense-smoke | --smoke | --full | --verify-only)
+    --env | --dense-smoke | --route-smoke | --smoke | --full | --verify-only)
       MODE="${1#--}"
       shift
       ;;
@@ -196,7 +198,45 @@ route_config() {
     echo "unknown route: $name" >&2
     exit 2
   fi
-  printf '%s' "$candidate"
+  # Config paths are opened inside the container, where the repo is /src.
+  printf '%s' "$(container_path "$candidate")"
+}
+
+route_smoke_preflight() {
+  local name="$1"
+  local cfg="$2"
+  local result code message
+  result="$(py -c 'import sys
+from tools.mesh.reconstruct.routes import route_smoke_preflight
+code, message = route_smoke_preflight(sys.argv[1], sys.argv[2], sys.argv[3])
+print(code)
+print(message)' "$name" "$cfg" "$ARTS")"
+  code="$(printf '%s\n' "$result" | sed -n '1p')"
+  message="$(printf '%s\n' "$result" | sed -n '2,$p')"
+  if [[ "$code" != "0" ]]; then
+    printf '%s\n' "$message" >&2
+    exit "$code"
+  fi
+}
+
+route_smoke_run() {
+  local name="$1"
+  local cfg="$2"
+  local run_id="$3"
+  local stages stage
+  stages="$(py -c 'import sys
+from tools.mesh.reconstruct.routes import route_stages
+print(" ".join(route_stages(sys.argv[1])))' "$name")"
+  for stage in $stages; do
+    run pipeline --config "$cfg" --window smoke --route "$name" \
+      --run-id "$run_id" --stage "$stage"
+  done
+}
+
+fallback_backend() {
+  py -c 'import sys
+from tools.mesh.reconstruct.routes import fallback_state
+print(fallback_state(sys.argv[1]).get("backend") or "")' "$ARTS"
 }
 
 THREADS="${OMP_NUM_THREADS:-8}"
@@ -251,6 +291,68 @@ case "$MODE" in
     [[ -n "$ROUTE" ]] && args+=(--route "$ROUTE")
     [[ -n "$RUN_ID" ]] && args+=(--run-id "$RUN_ID")
     run pipeline "${args[@]}"
+    ;;
+
+  route-smoke)
+    REQUESTED="$ROUTE"
+    if [[ -z "$REQUESTED" ]]; then
+      if [[ -z "$CONFIG" ]]; then
+        echo "--route-smoke requires --route <name> or --config <path>" >&2
+        exit 2
+      fi
+      REQUESTED="$(py -c 'import sys
+from tools.mesh.reconstruct.config import load_config
+print(load_config(sys.argv[1])["route"])' "$CONFIG")"
+    fi
+
+    if [[ "$REQUESTED" == "all" ]]; then
+      CANON_ID="colmap_openmvs-smoke-4615-4624"
+      O3D_ID="open3d_alpha-smoke-4615-4624"
+      [[ -n "$RUN_ID" ]] && CANON_ID="$RUN_ID-colmap_openmvs"
+      [[ -n "$RUN_ID" ]] && O3D_ID="$RUN_ID-open3d_alpha"
+
+      CANON_CFG="$(route_config colmap_openmvs)"
+      O3D_CFG="$(route_config open3d_alpha)"
+      route_smoke_preflight colmap_openmvs "$CANON_CFG"
+      route_smoke_run colmap_openmvs "$CANON_CFG" "$CANON_ID"
+
+      FALLBACK="$(fallback_backend)"
+      if [[ "$FALLBACK" == "openmvs_densify" ]]; then
+        O3D_WORK="$ARTS/runs/$O3D_ID/smoke"
+        run pipeline --config "$O3D_CFG" --window smoke \
+          --route open3d_alpha --run-id "$O3D_ID" --stage model
+        run py -c 'import sys
+from tools.mesh.reconstruct.routes import seed_open3d_dense
+print(seed_open3d_dense(sys.argv[1], sys.argv[2]))' \
+          "$O3D_WORK" "$ARTS/runs/$CANON_ID/smoke/openmvs/scene_dense.ply"
+        run pipeline --config "$O3D_CFG" --window smoke \
+          --route open3d_alpha --run-id "$O3D_ID" --stage build
+        SHARED=1
+        NOTE="Open3D consumed the canonical run's OpenMVS scene_dense.ply (approved openmvs_densify fallback); the A/B remains a mesher comparison."
+      else
+        route_smoke_preflight open3d_alpha "$O3D_CFG"
+        route_smoke_run open3d_alpha "$O3D_CFG" "$O3D_ID"
+        SHARED=0
+        NOTE="Canonical route densifies internally with OpenMVS DensifyPointCloud; Open3D consumes the COLMAP CUDA fused cloud (dense_backend=colmap_cuda). No dense-backend fallback checkpoint was selected."
+      fi
+
+      run py -c 'import sys
+from tools.mesh.reconstruct.routes import write_ab_from_stages
+path = write_ab_from_stages(
+    sys.argv[1],
+    {"colmap_openmvs": sys.argv[2], "open3d_alpha": sys.argv[3]},
+    {"shared_dense_cloud": sys.argv[4] == "1", "note": sys.argv[5]},
+)
+print(path)' "$ARTS" "$CANON_ID" "$O3D_ID" "$SHARED" "$NOTE"
+      exit 0
+    fi
+
+    if [[ -z "$CONFIG" ]]; then
+      CONFIG="$(route_config "$REQUESTED")"
+    fi
+    RUN_ID="${RUN_ID:-${REQUESTED}-smoke-4615-4624}"
+    route_smoke_preflight "$REQUESTED" "$CONFIG"
+    route_smoke_run "$REQUESTED" "$CONFIG" "$RUN_ID"
     ;;
 
   smoke)

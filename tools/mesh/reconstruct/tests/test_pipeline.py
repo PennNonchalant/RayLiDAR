@@ -26,11 +26,17 @@ def test_stages_table_has_exactly_six_stages() -> None:
     assert set(pipeline.STAGE_ORDER) == set(pipeline.STAGES)
 
 
-def test_build_stage_is_unavailable_until_later_plans_land() -> None:
-    with pytest.raises(pipeline.StageUnavailable) as excinfo:
-        pipeline.load_stage("build")
+def test_build_stage_resolves_to_the_route_builder() -> None:
+    from tools.mesh.reconstruct import routes
 
-    assert "build" in str(excinfo.value)
+    assert pipeline.load_stage("build") is routes.build
+
+
+def test_ingest_stage_is_unavailable_until_later_plans_land() -> None:
+    with pytest.raises(pipeline.StageUnavailable) as excinfo:
+        pipeline.load_stage("ingest")
+
+    assert "ingest" in str(excinfo.value)
 
 
 def test_run_stage_requires_config_sha256(monkeypatch: pytest.MonkeyPatch) -> None:
