@@ -1,13 +1,13 @@
 #pragma once
-#include <vulkan/vulkan_raii.hpp>
 #include <vk_mem_alloc.h>
+#include <vulkan/vulkan_raii.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
-#include <limits>
 
 namespace raylidar::vulkan
 {
@@ -34,7 +34,7 @@ struct ContextDescription
 
 class VulkanContext
 {
-public:
+  public:
     explicit VulkanContext(const ContextDescription &description = {});
 
     ~VulkanContext() = default;
@@ -83,7 +83,7 @@ public:
 
     void WaitIdle() const;
 
-private:
+  private:
     void Initialize(const ContextDescription &description);
 
     void CreateInstance(const ContextDescription &description);

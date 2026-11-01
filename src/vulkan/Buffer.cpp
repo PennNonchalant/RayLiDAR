@@ -3,10 +3,10 @@
 #include "VulkanContext.h"
 
 #include <bit>
+#include <cassert>
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <cassert>
 
 namespace raylidar::vulkan
 {
@@ -161,8 +161,8 @@ void Buffer::Write(std::span<const std::byte> data, vk::DeviceSize offset)
 
     if (result != VK_SUCCESS)
     {
-        throw std::runtime_error("Failed to write buffer memory. VkResult: " +
-                                 std::to_string(static_cast<int>(result)) + ".");
+        throw std::runtime_error(
+            "Failed to write buffer memory. VkResult: " + std::to_string(static_cast<int>(result)) + ".");
     }
 }
 
@@ -186,8 +186,8 @@ void Buffer::Read(std::span<std::byte> destination, vk::DeviceSize offset) const
 
     if (result != VK_SUCCESS)
     {
-        throw std::runtime_error("Failed to read buffer memory. VkResult: " + 
-                                 std::to_string(static_cast<int>(result)) + ".");
+        throw std::runtime_error("Failed to read buffer memory. VkResult: " + std::to_string(static_cast<int>(result)) +
+                                 ".");
     }
 }
 

@@ -12,15 +12,15 @@ namespace raylidar::vulkan
 {
 namespace
 {
-constexpr std::uint32_t RequiredApiVersion = VK_API_VERSION_1_4;
-constexpr std::uint32_t ApplicationVersion =
+constexpr std::uint32_t kRequiredApiVersion = VK_API_VERSION_1_4;
+constexpr std::uint32_t kApplicationVersion =
     VK_MAKE_API_VERSION(0, RAYLIDAR_VERSION_MAJOR, RAYLIDAR_VERSION_MINOR, RAYLIDAR_VERSION_PATCH);
 
-constexpr const char *ValidationLayerName = "VK_LAYER_KHRONOS_validation";
+constexpr const char *kValidationLayerName = "VK_LAYER_KHRONOS_validation";
 
-constexpr std::array<const char *, 3> RequiredDeviceExtensions = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-                                                                  VK_KHR_RAY_QUERY_EXTENSION_NAME,
-                                                                  VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
+constexpr std::array<const char *, 3> kRequiredDeviceExtensions = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                                                                   VK_KHR_RAY_QUERY_EXTENSION_NAME,
+                                                                   VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
 
 VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                                                vk::DebugUtilsMessageTypeFlagsEXT,
@@ -84,7 +84,7 @@ void VulkanContext::CreateInstance(const ContextDescription &description)
 {
     // Vulkan 1.0 loaders may not expose this function.
     if (!m_context.getDispatcher()->vkEnumerateInstanceVersion ||
-        m_context.enumerateInstanceVersion() < RequiredApiVersion)
+        m_context.enumerateInstanceVersion() < kRequiredApiVersion)
     {
         throw std::runtime_error("RayLiDAR requires a Vulkan 1.4 loader.");
     }
@@ -98,7 +98,7 @@ void VulkanContext::CreateInstance(const ContextDescription &description)
 
         const bool validationAvailable =
             std::ranges::any_of(availableLayers, [](const vk::LayerProperties &properties) {
-                return std::string_view(properties.layerName.data()) == ValidationLayerName;
+                return std::string_view(properties.layerName.data()) == kValidationLayerName;
             });
 
         if (!validationAvailable)
@@ -108,7 +108,7 @@ void VulkanContext::CreateInstance(const ContextDescription &description)
                                      "EnableValidationLayers to false.");
         }
 
-        enabledLayers.push_back(ValidationLayerName);
+        enabledLayers.push_back(kValidationLayerName);
     }
 
     // Collect and deduplicate instance extension names.
@@ -159,10 +159,10 @@ void VulkanContext::CreateInstance(const ContextDescription &description)
 
     vk::ApplicationInfo applicationInformation;
     applicationInformation.setPApplicationName(description.ApplicationName.c_str())
-        .setApplicationVersion(ApplicationVersion)
+        .setApplicationVersion(kApplicationVersion)
         .setPEngineName("RayLiDAR")
-        .setEngineVersion(ApplicationVersion)
-        .setApiVersion(RequiredApiVersion);
+        .setEngineVersion(kApplicationVersion)
+        .setApiVersion(kRequiredApiVersion);
 
     auto debugInformation = MakeDebugMessengerCreateInfo();
 
@@ -226,14 +226,14 @@ void VulkanContext::PickPhysicalDevice(std::optional<std::uint32_t> requestedDev
 
         std::vector<std::string> rejectionReasons;
 
-        if (properties.apiVersion < RequiredApiVersion)
+        if (properties.apiVersion < kRequiredApiVersion)
         {
             rejectionReasons.emplace_back("Vulkan 1.4 is not supported");
         }
 
         const auto availableExtensions = physicalDevice.enumerateDeviceExtensionProperties();
 
-        for (const char *requiredExtension : RequiredDeviceExtensions)
+        for (const char *requiredExtension : kRequiredDeviceExtensions)
         {
             const bool available = std::ranges::any_of(
                 availableExtensions, [requiredExtension](const vk::ExtensionProperties &extensionProperties) {
@@ -374,7 +374,7 @@ void VulkanContext::CreateLogicalDevice()
 
     deviceInformation.get<vk::DeviceCreateInfo>()
         .setQueueCreateInfos(queueInformation)
-        .setPEnabledExtensionNames(RequiredDeviceExtensions);
+        .setPEnabledExtensionNames(kRequiredDeviceExtensions);
 
     deviceInformation.get<vk::PhysicalDeviceVulkan12Features>().setBufferDeviceAddress(true);
 
@@ -412,7 +412,7 @@ void VulkanContext::CreateAllocator()
 
     allocatorInformation.instance = static_cast<VkInstance>(*m_instance);
 
-    allocatorInformation.vulkanApiVersion = RequiredApiVersion;
+    allocatorInformation.vulkanApiVersion = kRequiredApiVersion;
     allocatorInformation.pVulkanFunctions = &vulkanFunctions;
 
     VmaAllocator allocator = nullptr;

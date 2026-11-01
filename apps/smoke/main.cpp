@@ -1,15 +1,15 @@
-#include "vulkan/VulkanContext.h"
 #include "vulkan/Buffer.h"
 #include "vulkan/ComputePipeline.h"
 #include "vulkan/Shader.h"
+#include "vulkan/VulkanContext.h"
 
+#include <array>
 #include <cstdint>
 #include <exception>
 #include <iostream>
 #include <limits>
-#include <stdexcept>
-#include <array>
 #include <span>
+#include <stdexcept>
 #include <utility>
 
 int main(int argc, char *argv[])
