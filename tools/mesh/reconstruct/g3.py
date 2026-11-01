@@ -33,6 +33,7 @@ import math
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -762,6 +763,58 @@ def smoke_range_check(range_metrics: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def write_route_decision(
+    out_root: str | Path,
+    run_id: str,
+    report_path: str | Path,
+    *,
+    decision: str,
+    reason: str,
+) -> Path:
+    """Record a D-09 route decision next to the failing gate report.
+
+    The decision record always carries the measured G3 failures, so a route is
+    never switched (or kept) without the evidence that motivated it.
+    """
+    report_path = Path(report_path)
+    if not report_path.is_file():
+        raise G3Error(f"cannot record a decision without a gate report: {report_path}")
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise G3Error(f"corrupt gate report {report_path}: {exc}") from exc
+    checks = report.get("checks") or {}
+    payload = {
+        "schema_version": 1,
+        "run_id": str(run_id),
+        "decision": str(decision),
+        "reason": str(reason),
+        "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "g3_report": str(report_path),
+        "g3_pass": bool(report.get("pass")),
+        "window": report.get("window"),
+        "frames": report.get("frames"),
+        "mesh": report.get("mesh"),
+        "failures": list(report.get("failures") or []),
+        "failing_metrics": {
+            name: {
+                "measured": (checks.get(name) or {}).get("measured"),
+                "threshold": (checks.get(name) or {}).get("threshold"),
+                "reason": (checks.get(name) or {}).get("reason"),
+            }
+            for name in report.get("failures") or []
+            if name in checks
+        },
+        "alignment_applied": bool(report.get("alignment_applied")),
+        "evaluation_frames_used_for_tuning": bool(
+            report.get("evaluation_frames_used_for_tuning")
+        ),
+    }
+    path = Path(out_root) / "route_decisions" / f"{run_id}.json"
+    _write_json(path, payload)
+    return path
+
+
 def _tool_versions(env: Mapping[str, Any] | None) -> dict[str, Any]:
     env = env or {}
     packages = env.get("packages") or {}
@@ -959,4 +1012,5 @@ __all__ = [
     "gt_extent",
     "smoke_range",
     "smoke_range_check",
+    "write_route_decision",
 ]

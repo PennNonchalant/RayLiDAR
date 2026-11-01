@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping
 
 from .config import config_sha256, load_config
 from .contracts import WindowSpec
-from .routes import ROUTES, RouteUnavailable, resolve_route
+from .routes import ROUTES, RouteUnavailable, resolve_route, route_stages
 
 
 class StageUnavailable(RuntimeError):
@@ -40,6 +40,18 @@ STAGES: dict[str, str] = {
 }
 
 STAGE_ORDER: tuple[str, ...] = ("model", "dense", "build", "ingest", "gate", "report")
+
+
+def stage_sequence(route_name: str) -> tuple[str, ...]:
+    """Return the stages a route actually runs, in order.
+
+    The canonical route densifies inside its own ``build`` stage, so it never
+    runs the shared ``dense`` stage; the Open3D mesher consumes a COLMAP dense
+    cloud and therefore does.  ``report`` is always last.
+    """
+    prefix = tuple(stage for stage in route_stages(route_name) if stage in STAGES)
+    return prefix + ("ingest", "gate", "report")
+
 
 # Which context key receives the stage's own result payload.
 STAGE_CONTEXT_KEYS: dict[str, str | None] = {
@@ -228,10 +240,17 @@ def main(argv: list[str] | None = None) -> int:
         ctx = _build_context(cfg, args.window, workdir, run_id, _load_env_report(cfg))
         _load_previous_stages(ctx, workdir)
 
+        sequence = stage_sequence(cfg["route"])
+
         if args.stop_before:
             if args.stop_before not in STAGES:
                 raise StageContractError(f"unknown stage: {args.stop_before}")
-            for stage in STAGE_ORDER:
+            if args.stop_before not in sequence:
+                raise StageContractError(
+                    f"stage {args.stop_before} is not part of route "
+                    f"{cfg['route']} ({' -> '.join(sequence)})"
+                )
+            for stage in sequence:
                 if stage == args.stop_before:
                     break
                 run_stage(stage, ctx)
@@ -241,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             run_stage(args.stage, ctx)
             return 0
 
-        for stage in STAGE_ORDER:
+        for stage in sequence:
             run_stage(stage, ctx)
         return 0
     except (

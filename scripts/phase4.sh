@@ -10,6 +10,7 @@
 #   bash scripts/phase4.sh --smoke [--route <name>|all] --config <path>
 #   bash scripts/phase4.sh --full --route <name> --config <path>
 #   bash scripts/phase4.sh --verify-only --config <path> --run-id <id>
+#   bash scripts/phase4.sh --promote --run-id <id> --config <path>
 #
 # Every Python/CLI invocation runs inside the approved project container via
 # scripts/run-in-container.sh; the host only parses modes and paths.
@@ -32,16 +33,20 @@ Modes:
   --stage <name>              dispatch one pipeline stage
   --dense-smoke               run model + dense on the smoke window
   --route-smoke               run one route (or all runnable routes, + A/B) on smoke
-  --smoke [--route all]       run all six stages on the smoke window
-  --full                      run all six stages on the full window
+  --smoke [--route all]       run the route's stages on the smoke window
+  --full                      run the route's stages on the full window
   --verify-only               re-hash a run and re-validate its canonical mesh
+  --promote                   write the A/B report and promote a passing mesh
 
 Options:
-  --config <path>   route config YAML
-  --window <name>   smoke|full (default: smoke)
-  --route <name>    route override, or 'all' for --smoke
-  --run-id <id>     stable run identifier (needed by --verify-only)
-  --bundle-root <p> bundle root for --env
+  --config <path>            route config YAML
+  --window <name>            smoke|full (default: smoke)
+  --route <name>             route override, or 'all' for --smoke
+  --run-id <id>              stable run identifier (needed by --verify-only)
+  --stop-before <stage>      stop before this stage (e.g. 'report')
+  --allow-failing-smoke      run --full for diagnosis after a failing smoke gate
+                              (records a D-09 route decision; never promotes)
+  --bundle-root <p>          bundle root for --env
 
 Exit codes: 0 success, 2 usage, 3 missing precondition, otherwise the failing
 command's exit code.
@@ -54,12 +59,14 @@ WINDOW="smoke"
 ROUTE=""
 RUN_ID=""
 STAGE=""
+STOP_BEFORE=""
+ALLOW_FAILING_SMOKE=0
 BUNDLE_ROOT="$DEFAULT_BUNDLE"
 PYTEST_ARGS=()
 
 while (($#)); do
   case "$1" in
-    --env | --dense-smoke | --route-smoke | --smoke | --full | --verify-only)
+    --env | --dense-smoke | --route-smoke | --smoke | --full | --verify-only | --promote)
       MODE="${1#--}"
       shift
       ;;
@@ -93,6 +100,14 @@ while (($#)); do
     --run-id)
       RUN_ID="${2:-}"
       shift 2
+      ;;
+    --stop-before)
+      STOP_BEFORE="${2:-}"
+      shift 2
+      ;;
+    --allow-failing-smoke)
+      ALLOW_FAILING_SMOKE=1
+      shift
       ;;
     --bundle-root)
       BUNDLE_ROOT="${2:-}"
@@ -152,6 +167,14 @@ from tools.mesh.reconstruct.config import load_config
 print(load_config(sys.argv[1])["out_root"])' "$1"
 }
 
+run_id_for_config_route() {
+  py -c 'import sys
+from tools.mesh.reconstruct.config import config_sha256, load_config
+cfg = dict(load_config(sys.argv[1]))
+cfg["route"] = sys.argv[2]
+print(f"{sys.argv[2]}-{config_sha256(cfg)[:12]}")' "$1" "$2"
+}
+
 default_run_id() {
   py -c 'import sys
 from tools.mesh.reconstruct.config import config_sha256, load_config
@@ -177,6 +200,87 @@ require_config() {
   if [[ -z "$CONFIG" ]]; then
     echo "mode '$MODE' requires --config <path>" >&2
     exit 2
+  fi
+}
+
+smoke_gate_pass() {
+  local report="$1"
+  py -c 'import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(1)
+seen = []
+
+def walk(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("pass", "passed"):
+                seen.append(value is True)
+            walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            walk(value)
+
+walk(json.load(path.open()))
+raise SystemExit(0 if seen and all(seen) else 1)' "$report"
+}
+
+record_gate_failure() {
+  local window="$1" run_id="$2" decision="$3" reason="$4"
+  local report="$ARTS/runs/$run_id/$window/g3_report.json"
+  [[ -f "$report" ]] || return 0
+  py -c 'import sys
+from tools.mesh.reconstruct import g3
+path = g3.write_route_decision(
+    sys.argv[1], sys.argv[2], sys.argv[3],
+    decision=sys.argv[4], reason=sys.argv[5],
+)
+print(f"route decision: {path}")' "$ARTS" "$run_id" "$report" "$decision" "$reason"
+}
+
+record_run_failure() {
+  local window="$1" run_id="$2" code="$3" status="$4"
+  local run_dir="$ARTS/runs/$run_id/$window"
+  [[ -d "$run_dir" ]] || return 0
+  py -c 'import json, pathlib, sys
+from datetime import datetime, timezone
+path = pathlib.Path(sys.argv[1]) / "RESOURCE_LIMIT.json"
+payload = {
+    "schema_version": 1,
+    "status": sys.argv[2],
+    "exit_code": int(sys.argv[3]),
+    "error": sys.argv[4],
+    "captured_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+print(f"run failure recorded: {path}")' "$run_dir" "$status" "$code" \
+    "pipeline exited $code in the $window window; see the run log"
+}
+
+run_gate() {
+  local window="$1" run_id="$2"
+  shift 2
+  printf '+'
+  printf ' %q' "$@"
+  printf '\n'
+  set +e
+  "$@"
+  local code=$?
+  set -e
+  if [[ $code -ne 0 ]]; then
+    if [[ $code -eq 6 ]]; then
+      record_gate_failure "$window" "$run_id" "gate_failed" \
+        "G3 failed on the $window window; no mesh was promoted" || true
+    else
+      if [[ $code -eq 137 || $code -eq 9 ]]; then
+        STATUS="not_run_resource_limit"
+      else
+        STATUS="run_failed"
+      fi
+      record_run_failure "$window" "$run_id" "$code" "$STATUS" || true
+    fi
+    echo "FAILED ($code): $*" >&2
+    exit "$code"
   fi
 }
 
@@ -365,42 +469,48 @@ print("\n".join(sorted(ROUTES)))')
       done
     else
       require_config
-      args=(--config "$CONFIG" --window smoke)
+      [[ -z "$RUN_ID" ]] && RUN_ID="$(default_run_id "$ROUTE")"
+      args=(--config "$CONFIG" --window smoke --run-id "$RUN_ID")
       [[ -n "$ROUTE" ]] && args+=(--route "$ROUTE")
-      [[ -n "$RUN_ID" ]] && args+=(--run-id "$RUN_ID")
-      run pipeline "${args[@]}"
+      [[ -n "$STOP_BEFORE" ]] && args+=(--stop-before "$STOP_BEFORE")
+      run_gate smoke "$RUN_ID" pipeline "${args[@]}"
     fi
     ;;
 
   full)
     require_config
     [[ -z "$RUN_ID" ]] && RUN_ID="$(default_run_id "$ROUTE")"
-    GATE="$ARTS/runs/$RUN_ID/smoke/stages/gate.json"
-    if ! py -c 'import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-if not path.is_file():
-    print(f"missing smoke gate record: {path}", file=sys.stderr)
-    raise SystemExit(1)
-seen = []
-
-def walk(node):
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key in ("pass", "passed"):
-                seen.append(value is True)
-            walk(value)
-    elif isinstance(node, list):
-        for value in node:
-            walk(value)
-
-walk(json.load(path.open()))
-raise SystemExit(0 if seen and all(seen) else 1)' "$GATE"; then
-      echo "refusing --full: no passing smoke run for $RUN_ID ($GATE)" >&2
-      exit 3
+    GATE="$ARTS/runs/$RUN_ID/smoke/g3_report.json"
+    if ! smoke_gate_pass "$GATE"; then
+      if [[ "$ALLOW_FAILING_SMOKE" == "1" && -f "$GATE" ]]; then
+        echo "WARNING: smoke G3 failed for $RUN_ID; running the full window for" >&2
+        echo "diagnosis only. Promotion still requires g3.pass == true." >&2
+        record_gate_failure smoke "$RUN_ID" "diagnostic_full_run" \
+          "Operator requested a full-window diagnostic after a failing smoke gate"
+      else
+        echo "refusing --full: no passing smoke run for $RUN_ID ($GATE)" >&2
+        exit 3
+      fi
     fi
     args=(--config "$CONFIG" --window full --run-id "$RUN_ID")
     [[ -n "$ROUTE" ]] && args+=(--route "$ROUTE")
-    run pipeline "${args[@]}"
+    [[ -n "$STOP_BEFORE" ]] && args+=(--stop-before "$STOP_BEFORE")
+    run_gate full "$RUN_ID" pipeline "${args[@]}"
+    ;;
+
+  promote)
+    require_config
+    if [[ -z "$RUN_ID" ]]; then
+      echo "--promote requires --run-id" >&2
+      exit 2
+    fi
+    args=(--run-id "$RUN_ID" --config "$CONFIG")
+    O3D_ID="$(run_id_for_config_route "$(route_config open3d_alpha)" open3d_alpha)"
+    if [[ -d "$ARTS/runs/$O3D_ID/full" ]]; then
+      args+=(--ab-route "open3d_alpha=$O3D_ID")
+    fi
+    [[ -n "${ASSETS_ROOT:-}" ]] && args+=(--assets-root "$ASSETS_ROOT")
+    run py -m tools.mesh.reconstruct.report "${args[@]}"
     ;;
 
   verify-only)

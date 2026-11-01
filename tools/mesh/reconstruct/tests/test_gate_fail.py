@@ -179,3 +179,30 @@ def test_pipeline_gate_stage_exits_6_on_a_failing_run(tmp_path: Path) -> None:
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["pass"] is False
     assert report["alignment_applied"] is False
+
+
+def test_route_decision_records_the_failing_metrics(tmp_path: Path) -> None:
+    bundle, artifact, cfg, artifacts = _failing_fixture(tmp_path)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    with pytest.raises(SystemExit):
+        g3.evaluate(
+            artifact, str(bundle), "smoke", SMOKE, cfg, str(workdir), {}
+        )
+
+    path = g3.write_route_decision(
+        artifacts / "04",
+        "canonical-smoke",
+        workdir / "g3_report.json",
+        decision="gate_failed",
+        reason="smoke G3 failed on components",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert path == artifacts / "04" / "route_decisions" / "canonical-smoke.json"
+    assert payload["decision"] == "gate_failed"
+    assert payload["g3_pass"] is False
+    assert "components_ok" in payload["failures"]
+    assert payload["failing_metrics"]["components_ok"]["measured"][
+        "largest_component_fraction"
+    ] == pytest.approx(0.5)

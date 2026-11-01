@@ -161,3 +161,21 @@ def test_route_override_changes_config_hash(
     )
     assert overridden == 0
     assert capsys.readouterr().out.strip() != base_digest
+
+
+def test_route_stage_sequence_skips_dense_for_the_canonical_route() -> None:
+    assert pipeline.stage_sequence("colmap_openmvs") == (
+        "model",
+        "build",
+        "ingest",
+        "gate",
+        "report",
+    )
+    assert pipeline.stage_sequence("open3d_alpha") == (
+        "model",
+        "dense",
+        "build",
+        "ingest",
+        "gate",
+        "report",
+    )
