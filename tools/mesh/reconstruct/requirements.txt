@@ -1,0 +1,6 @@
+open3d==0.20.0
+numpy>=2,<3
+trimesh>=4,<5
+PyYAML>=6,<7
+pytest>=8,<9
+pytest-timeout>=2,<3
