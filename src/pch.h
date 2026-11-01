@@ -13,5 +13,9 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <cstddef>
+#include <span>
+#include <bit>
 
 #include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan.hpp>

@@ -427,4 +427,4 @@ void VulkanContext::CreateAllocator()
 
     m_allocator.reset(allocator);
 }
-}
+} // namespace raylidar::vulkan

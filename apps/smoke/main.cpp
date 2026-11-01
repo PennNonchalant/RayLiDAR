@@ -1,10 +1,14 @@
 #include "vulkan/VulkanContext.h"
+#include "vulkan/Buffer.h"
 
 #include <cstdint>
 #include <exception>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <array>
+#include <span>
+#include <utility>
 
 int main()
 {
@@ -37,6 +41,39 @@ int main()
                       << "AS scratch alignment: "
                       << context.AccelerationStructureProperties().minAccelerationStructureScratchOffsetAlignment
                       << '\n';
+
+            {
+                const std::array<std::uint32_t, 4> data = {1, 2, 3, 4};
+                const auto bytes = std::as_bytes(std::span(data));
+
+                raylidar::vulkan::BufferDescription bufferDescription;
+                bufferDescription.Size = static_cast<vk::DeviceSize>(bytes.size());
+                bufferDescription.Usage = vk::BufferUsageFlagBits::eTransferSrc;
+                bufferDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Upload;
+
+                raylidar::vulkan::Buffer buffer(context, bufferDescription);
+                buffer.Write(bytes);
+
+                const vk::Buffer originalHandle = buffer.Handle();
+
+                // Move construction.
+                raylidar::vulkan::Buffer movedBuffer(std::move(buffer));
+
+                // Move assignment also releases the destination's previous allocation.
+                raylidar::vulkan::Buffer assignedBuffer(context, bufferDescription);
+                assignedBuffer = std::move(movedBuffer);
+
+                if (!assignedBuffer.Handle() || assignedBuffer.Handle() != originalHandle ||
+                    assignedBuffer.Size() != bufferDescription.Size)
+                {
+                    throw std::runtime_error("Buffer initialization or move failed.");
+                }
+
+                // Confirm the destination remains usable after moving.
+                assignedBuffer.Write(bytes);
+            }
+
+            std::cout << "Buffer creation, write, move, and destruction completed.\n";
 
             context.WaitIdle();
         }

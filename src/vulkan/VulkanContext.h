@@ -107,4 +107,4 @@ private:
 
     UniqueVmaAllocator m_allocator = nullptr;
 };
-}
+} // namespace raylidar::vulkan
