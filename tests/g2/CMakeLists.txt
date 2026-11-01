@@ -6,5 +6,4 @@ target_link_libraries(raylidar_test_g2 PRIVATE raylidar::raylidar Catch2::Catch2
 target_compile_features(raylidar_test_g2 PRIVATE cxx_std_20)
 target_compile_definitions(raylidar_test_g2 PRIVATE
     RAYLIDAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_include_directories(raylidar_test_g2 PRIVATE "${PROJECT_SOURCE_DIR}/include")
 catch_discover_tests(raylidar_test_g2 PROPERTIES LABELS g2)

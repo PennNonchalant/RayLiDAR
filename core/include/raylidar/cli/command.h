@@ -17,7 +17,10 @@ RAYLIDAR_EXPORT void RegisterCommand(std::string_view name, std::string_view hel
                                      CommandFn fn);
 
 /// Helper object instantiated by RAYLIDAR_REGISTER_COMMAND.
-struct CommandRegistrar
+///
+/// The struct is exported because the registrar lives in data_process command
+/// translation units while the registry itself lives in core.
+struct RAYLIDAR_EXPORT CommandRegistrar
 {
     CommandRegistrar(std::string_view name, std::string_view help, CommandFn fn);
 };

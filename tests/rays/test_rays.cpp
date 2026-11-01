@@ -2,6 +2,7 @@
 
 #include <raylidar/common/io.h>
 #include <raylidar/rays/rays.h>
+#include <raylidar/rays/build.h>
 
 #include <catch2/catch_test_macros.hpp>
 

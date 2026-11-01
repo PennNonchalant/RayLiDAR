@@ -7,6 +7,7 @@
 #include <raylidar/gt/cache.h>
 #include <raylidar/rays/occlusion.h>
 #include <raylidar/rays/rays.h>
+#include <raylidar/rays/build.h>
 
 #include <stb_image.h>
 

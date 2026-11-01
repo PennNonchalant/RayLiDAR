@@ -2,6 +2,7 @@
 
 #include <raylidar/common/io.h>
 #include <raylidar/gt/cache.h>
+#include <raylidar/gt/manifest.h>
 
 #include <catch2/catch_test_macros.hpp>
 

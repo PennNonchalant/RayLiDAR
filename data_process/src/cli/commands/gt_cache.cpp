@@ -6,6 +6,7 @@
 #include <raylidar/common/io.h>
 #include <raylidar/common/mask_bits.h>
 #include <raylidar/gt/cache.h>
+#include <raylidar/gt/manifest.h>
 #include <raylidar/gt/camera_assign.h>
 #include <raylidar/lidar/uncurl.h>
 #include <raylidar/lidar/velodyne.h>

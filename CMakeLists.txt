@@ -34,7 +34,22 @@ if(NOT LibArchive_FOUND)
 endif()
 
 enable_testing()
+add_subdirectory(core)
+add_subdirectory(data_process)
+add_subdirectory(eval)
 add_subdirectory(src)
+
+# Umbrella target kept for apps/tests that need the data pipeline. The runtime
+# and eval targets are deliberately not folded into this; new code should link
+# raylidar::core / raylidar::data_process / raylidar::eval / raylidar::runtime
+# explicitly.
+add_library(raylidar INTERFACE)
+add_library(raylidar::raylidar ALIAS raylidar)
+target_link_libraries(raylidar INTERFACE
+    raylidar_core
+    raylidar_data_process
+    raylidar_runtime)
+
 add_subdirectory(apps/cli)
 
 find_package(VulkanHeaders 1.4 CONFIG REQUIRED)
@@ -44,7 +59,7 @@ add_executable(raylidar_smoke apps/smoke/main.cpp)
 target_compile_features(raylidar_smoke PRIVATE cxx_std_20)
 target_link_libraries(raylidar_smoke PRIVATE Vulkan::Headers ${CMAKE_DL_LIBS})
 
-foreach(target IN ITEMS raylidar raylidar_cli raylidar_smoke)
+foreach(target IN ITEMS raylidar_core raylidar_data_process raylidar_cli raylidar_smoke)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc /utf-8)
     else()

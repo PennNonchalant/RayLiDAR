@@ -1,5 +1,12 @@
 add_executable(raylidar_cli main.cpp)
-target_link_libraries(raylidar_cli PRIVATE raylidar::raylidar)
+target_link_libraries(raylidar_cli PRIVATE raylidar::raylidar raylidar::eval)
+
+# Command registrars live in shared libraries and are not referenced by the
+# executable; --no-as-needed keeps those libraries loaded so their static
+# registrars run. Windows import libraries are loaded because they are listed.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(raylidar_cli PRIVATE "LINKER:--no-as-needed")
+endif()
 
 add_test(NAME cli_version COMMAND raylidar_cli --version)
 set_tests_properties(cli_version PROPERTIES

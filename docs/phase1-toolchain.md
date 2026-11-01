@@ -28,7 +28,7 @@ package): `share/libarchive/` contains `vcpkg-cmake-wrapper.cmake` and `usage`,
 not a `*Config.cmake`. `CMakeLists.txt` therefore tries
 `find_package(LibArchive CONFIG QUIET)` first and falls back to
 `find_package(LibArchive REQUIRED)`. Both paths resolve to the imported target
-`LibArchive::LibArchive` on CMake >= 3.17, which is what `src/CMakeLists.txt`
+`LibArchive::LibArchive` on CMake >= 3.17, which is what `data_process/CMakeLists.txt`
 links (PUBLIC, because later dataset tests build archive fixtures). The
 configure log confirms `Found LibArchive: .../libarchive.a (found version
 3.8.9)`.
@@ -40,11 +40,11 @@ by targets under `tests/`.
 
 ## STB single-translation-unit rule
 
-`src/common/stb_impl.cpp` is the **only** translation unit that defines
+`data_process/src/common/stb_impl.cpp` is the **only** translation unit that defines
 `STB_IMAGE_IMPLEMENTATION` and `STB_IMAGE_WRITE_IMPLEMENTATION`, then includes
-`<stb_image.h>` and `<stb_image_write.h>`. Because `src/CMakeLists.txt` globs
-`src/**/*.cpp`, that file compiles into `raylidar` once; no other target may add
-an STB implementation TU.
+`<stb_image.h>` and `<stb_image_write.h>`. Because `data_process/CMakeLists.txt` globs
+`data_process/src/**/*.cpp`, that file compiles into `raylidar_data_process` once;
+no other target may add an STB implementation TU.
 
 Every other translation unit includes `<stb_image.h>` / `<stb_image_write.h>`
 **without** the implementation macros. `tests/common/test_io.cpp` encodes a 2×2
@@ -58,11 +58,12 @@ once.
 
 ## `RAYLIDAR_EXPORT` rule
 
-`raylidar` is built with `CXX_VISIBILITY_PRESET hidden` and
+`raylidar_core`, `raylidar_data_process`, and the future `raylidar_runtime` are built with `CXX_VISIBILITY_PRESET hidden` and
 `VISIBILITY_INLINES_HIDDEN ON`. Every public function/class in
-`include/raylidar/**` must be annotated with `RAYLIDAR_EXPORT` from
+`core/include/raylidar/**`, `data_process/include/raylidar/**`, or
+`eval/include/raylidar/**` must be annotated with `RAYLIDAR_EXPORT` from
 `<raylidar/export.h>`; inline/template definitions in headers do not need it.
-Tests link the shared library, so a missing annotation fails at link time.
+Tests link the umbrella `raylidar::raylidar` target (core + data_process + runtime), so a missing annotation fails at link time.
 
 ## Environment variables
 
