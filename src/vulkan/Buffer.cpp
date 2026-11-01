@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <cassert>
 
 namespace raylidar::vulkan
 {
@@ -20,12 +21,8 @@ Buffer::~Buffer() noexcept
 }
 
 Buffer::Buffer(Buffer &&other) noexcept
-    : m_allocator(std::exchange(other.m_allocator, nullptr)), m_buffer(std::exchange(other.m_buffer, vk::Buffer{})),
-      m_allocation(std::exchange(other.m_allocation, nullptr)), m_size(std::exchange(other.m_size, vk::DeviceSize{0})),
-      m_usage(std::exchange(other.m_usage, vk::BufferUsageFlags{})),
-      m_memoryUsage(std::exchange(other.m_memoryUsage, BufferMemoryUsage::Device)),
-      m_deviceAddress(std::exchange(other.m_deviceAddress, vk::DeviceAddress{0}))
 {
+    *this = std::move(other);
 }
 
 Buffer &Buffer::operator=(Buffer &&other) noexcept
@@ -63,13 +60,6 @@ void Buffer::Initialize(const VulkanContext &context, const BufferDescription &d
         throw std::invalid_argument("Buffer minimum alignment must be zero or a power of two.");
     }
 
-    const VmaAllocator allocator = context.Allocator().get();
-
-    if (!allocator)
-    {
-        throw std::invalid_argument("Cannot create a buffer without a valid VMA allocator.");
-    }
-
     VkBufferCreateInfo bufferInformation{};
     bufferInformation.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInformation.size = description.Size;
@@ -98,9 +88,10 @@ void Buffer::Initialize(const VulkanContext &context, const BufferDescription &d
         throw std::invalid_argument("Unsupported buffer memory usage.");
     }
 
+    const VmaAllocator allocator = context.Allocator().get();
+
     VkBuffer buffer{};
     VmaAllocation allocation = nullptr;
-
     VkResult result = VK_SUCCESS;
 
     if (description.MinimumAlignment == 0)
@@ -116,36 +107,7 @@ void Buffer::Initialize(const VulkanContext &context, const BufferDescription &d
     if (result != VK_SUCCESS)
     {
         throw std::runtime_error("Failed to create buffer: size=" + std::to_string(description.Size) +
-                                 ", usage=" + std::to_string(static_cast<VkBufferUsageFlags>(description.Usage)) +
                                  ", VkResult=" + std::to_string(static_cast<int>(result)) + ".");
-    }
-
-    vk::DeviceAddress deviceAddress = 0;
-
-    try
-    {
-        if (description.Usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)
-        {
-            vk::BufferDeviceAddressInfo addressInformation;
-            addressInformation.setBuffer(vk::Buffer(buffer));
-
-            deviceAddress = context.Device().getBufferAddress(addressInformation);
-
-            if (deviceAddress == 0)
-            {
-                throw std::runtime_error("Buffer device address is zero.");
-            }
-
-            if (description.MinimumAlignment != 0 && deviceAddress % description.MinimumAlignment != 0)
-            {
-                throw std::runtime_error("Buffer device address does not satisfy the requested minimum alignment.");
-            }
-        }
-    }
-    catch (...)
-    {
-        vmaDestroyBuffer(allocator, buffer, allocation);
-        throw;
     }
 
     m_allocator = allocator;
@@ -154,15 +116,22 @@ void Buffer::Initialize(const VulkanContext &context, const BufferDescription &d
     m_size = description.Size;
     m_usage = description.Usage;
     m_memoryUsage = description.MemoryUsage;
-    m_deviceAddress = deviceAddress;
+
+    if (m_usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)
+    {
+        vk::BufferDeviceAddressInfo addressInformation;
+        addressInformation.setBuffer(m_buffer);
+
+        m_deviceAddress = context.Device().getBufferAddress(addressInformation);
+
+        assert(m_deviceAddress != 0);
+        assert(description.MinimumAlignment == 0 || m_deviceAddress % description.MinimumAlignment == 0);
+    }
 }
 
 vk::DeviceAddress Buffer::DeviceAddress() const
 {
-    if (!m_buffer)
-    {
-        throw std::logic_error("Cannot query the device address of an empty or moved-from buffer.");
-    }
+    assert(m_buffer);
 
     if (!(m_usage & vk::BufferUsageFlagBits::eShaderDeviceAddress))
     {
@@ -192,8 +161,8 @@ void Buffer::Write(std::span<const std::byte> data, vk::DeviceSize offset)
 
     if (result != VK_SUCCESS)
     {
-        throw std::runtime_error(
-            "Failed to write buffer memory. VkResult: " + std::to_string(static_cast<int>(result)) + ".");
+        throw std::runtime_error("Failed to write buffer memory. VkResult: " +
+                                 std::to_string(static_cast<int>(result)) + ".");
     }
 }
 
@@ -217,17 +186,14 @@ void Buffer::Read(std::span<std::byte> destination, vk::DeviceSize offset) const
 
     if (result != VK_SUCCESS)
     {
-        throw std::runtime_error("Failed to read buffer memory. VkResult: " + std::to_string(static_cast<int>(result)) +
-                                 ".");
+        throw std::runtime_error("Failed to read buffer memory. VkResult: " + 
+                                 std::to_string(static_cast<int>(result)) + ".");
     }
 }
 
 void Buffer::ValidateRange(std::size_t byteCount, vk::DeviceSize offset) const
 {
-    if (!m_buffer)
-    {
-        throw std::logic_error("Cannot access an empty or moved-from buffer.");
-    }
+    assert(m_buffer);
 
     if (offset > m_size || std::cmp_greater(byteCount, m_size - offset))
     {

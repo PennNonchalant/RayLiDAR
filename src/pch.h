@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <span>
 #include <bit>
+#include <cassert>
 
 #include <vulkan/vulkan_raii.hpp>
 #include <vulkan/vulkan.hpp>
