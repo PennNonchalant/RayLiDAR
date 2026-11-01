@@ -8,8 +8,11 @@ add_executable(raylidar_test_eval_e2e
     test_scene.cpp
     test_eval_cli.cpp)
 
+# `raylidar::data_process` supplies the self-registration registry
+# (RegisterCommand/CommandRegistrar) used by the `eval` command translation unit.
 target_link_libraries(raylidar_test_eval_e2e PRIVATE
     raylidar::eval
+    raylidar::data_process
     Catch2::Catch2WithMain)
 
 target_compile_features(raylidar_test_eval_e2e PRIVATE cxx_std_20)

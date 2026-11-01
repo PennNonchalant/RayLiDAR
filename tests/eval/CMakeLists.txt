@@ -11,7 +11,12 @@ add_executable(raylidar_test_eval
     test_prf.cpp
     test_synthetic.cpp)
 
-target_link_libraries(raylidar_test_eval PRIVATE raylidar::eval Catch2::Catch2WithMain)
+# The eval library now carries the `eval` CLI registrar, whose registry lives in
+# data_process; link it so the unit-test executable can resolve the symbol.
+target_link_libraries(raylidar_test_eval PRIVATE
+    raylidar::eval
+    raylidar::data_process
+    Catch2::Catch2WithMain)
 target_compile_features(raylidar_test_eval PRIVATE cxx_std_20)
 target_compile_definitions(raylidar_test_eval PRIVATE
     RAYLIDAR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
