@@ -1,5 +1,6 @@
 #include "fixture.h"
 
+#include <raylidar/eval/aggregate.h>
 #include <raylidar/eval/metrics.h>
 #include <raylidar/eval/types.h>
 
