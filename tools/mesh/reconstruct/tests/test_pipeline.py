@@ -109,3 +109,50 @@ def test_unknown_stage_exits_non_zero(capsys: pytest.CaptureFixture[str]) -> Non
 
     assert exit_code != 0
     assert "unknown stage" in capsys.readouterr().err
+
+
+def test_each_route_config_hashes_distinctly(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    digests = []
+    for name in ("canonical_colmap_openmvs", "open3d_alpha", "openmvs_direct"):
+        exit_code = pipeline.main(
+            [
+                "--config",
+                str(CONFIG_DIR / f"{name}.yaml"),
+                "--stage",
+                "config-check",
+                "--window",
+                "smoke",
+            ]
+        )
+
+        assert exit_code == 0
+        printed = capsys.readouterr().out.strip()
+        assert HEX64.match(printed), name
+        digests.append(printed)
+
+    assert len(set(digests)) == 3
+
+
+def test_route_override_changes_config_hash(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    base = pipeline.main(
+        ["--config", str(CANONICAL), "--stage", "config-check"]
+    )
+    assert base == 0
+    base_digest = capsys.readouterr().out.strip()
+
+    overridden = pipeline.main(
+        [
+            "--config",
+            str(CANONICAL),
+            "--route",
+            "openmvs_direct",
+            "--stage",
+            "config-check",
+        ]
+    )
+    assert overridden == 0
+    assert capsys.readouterr().out.strip() != base_digest
