@@ -98,8 +98,9 @@ $env:PATH = "$env:VSINSTALLDIR/VC/Tools/Llvm/x64/bin;$env:PATH"
 $sources = git ls-files -- '*.cpp' '*.cc' '*.cxx' '*.h' '*.hh' '*.hpp' '*.hxx'
 clang-format --dry-run --Werror --style=file $sources
 
+# /Y- disables MSVC PCH use in clang-tidy while preserving forced includes.
 git ls-files -- '*.cpp' '*.cc' '*.cxx' | ForEach-Object {
-    clang-tidy --quiet -p build/windows-debug $_
+    clang-tidy --quiet -p build/windows-debug --extra-arg=/Y- $_
     if ($LASTEXITCODE -ne 0) { throw "clang-tidy failed: $_" }
 }
 ctest --preset windows-debug -LE gpu --output-on-failure --no-tests=error
