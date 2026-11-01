@@ -6,7 +6,10 @@ add_executable(raylidar_test_eval
     test_range.cpp
     test_miss_coverage.cpp
     test_buckets.cpp
-    test_aggregate.cpp)
+    test_aggregate.cpp
+    test_chamfer.cpp
+    test_prf.cpp
+    test_synthetic.cpp)
 
 target_link_libraries(raylidar_test_eval PRIVATE raylidar::eval Catch2::Catch2WithMain)
 target_compile_features(raylidar_test_eval PRIVATE cxx_std_20)
