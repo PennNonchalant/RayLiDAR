@@ -330,6 +330,44 @@ TEST_CASE("eval validate accepts clean artifacts and rejects corrupted ones",
         CHECK(Run({"validate", "--metrics", corrupt.string(), "--csv",
                    csvPath.string()}) == 6);
     }
+    SECTION("valid-hex recorded hash that disagrees with the artifact")
+    {
+        nlohmann::json document = raylidar::ReadJson(metricsPath);
+        document["inputs"]["ray_set_sha256"] = std::string(64U, 'a');
+        const fs::path corrupt = fixture.outDir / "valid_hex_metrics.json";
+        raylidar::WriteJson(corrupt, document);
+        CHECK(Run({"validate", "--metrics", corrupt.string(), "--csv",
+                   csvPath.string()}) == 6);
+    }
+    SECTION("one-byte mutation of the recorded ray artifact")
+    {
+        const fs::path rays = fixture.outDir / "rays_placeholder.bin";
+        std::string bytes = raylidar::test::ReadFileText(rays);
+        REQUIRE(bytes.size() > 64U);
+        bytes[64] = static_cast<char>(static_cast<unsigned char>(bytes[64]) ^ 0xFFU);
+        raylidar::test::WriteFileText(rays, bytes);
+        CHECK(Run({"validate", "--metrics", metricsPath.string(), "--csv",
+                   csvPath.string()}) == 6);
+    }
+    SECTION("one-byte mutation of the recorded scene artifact")
+    {
+        const fs::path scene = fixture.outDir / "scene.ply";
+        std::string bytes = raylidar::test::ReadFileText(scene);
+        REQUIRE(!bytes.empty());
+        bytes.back() = static_cast<char>(static_cast<unsigned char>(bytes.back()) ^ 0xFFU);
+        raylidar::test::WriteFileText(scene, bytes);
+        CHECK(Run({"validate", "--metrics", metricsPath.string(), "--csv",
+                   csvPath.string()}) == 6);
+    }
+    SECTION("missing sim_io_manifest.json")
+    {
+        const fs::path manifest = fixture.outDir / "sim_io_manifest.json";
+        const fs::path backup = fixture.outDir / "sim_io_manifest.json.bak";
+        fs::rename(manifest, backup);
+        CHECK(Run({"validate", "--metrics", metricsPath.string(), "--csv",
+                   csvPath.string()}) == 4);
+        fs::rename(backup, manifest);
+    }
     SECTION("removed CSV row")
     {
         std::vector<std::string> lines = ReadLines(csvPath);
