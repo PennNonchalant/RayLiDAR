@@ -63,6 +63,14 @@ struct RAYLIDAR_EXPORT MacroSummary
     std::optional<double> ray_recall_std;
     std::optional<double> coverage_mean;
     std::optional<double> coverage_std;
+
+    // Per-frame macro of the primary-tau (0.20 m) nearest-neighbour P/R/F.
+    std::optional<double> precision_mean;
+    std::optional<double> precision_std;
+    std::optional<double> recall_mean;
+    std::optional<double> recall_std;
+    std::optional<double> f_score_mean;
+    std::optional<double> f_score_std;
 };
 
 /// Aggregate one set of samples into a cell, pairing accuracy with coverage.
@@ -83,4 +91,49 @@ AggregatePerCamera(std::span<const RaySample> samples);
 
 /// Macro mean/sample-std over the per-frame primary cells.
 RAYLIDAR_EXPORT MacroSummary SummarizeMacro(std::span<const FrameMetrics> frames);
+
+/// P/R/F at one tau for both matching policies.
+struct RAYLIDAR_EXPORT TauPrf
+{
+    double tau = 0.0;
+    PrfMetrics nearest;
+    PrfMetrics greedy;
+};
+
+/// One frame x camera x bucket row.
+///
+/// `cell.n_raw == 0` means the raw denominator is unavailable at this row
+/// granularity (the frozen inputs carry per-frame, not per-camera, counts), so
+/// `cell.coverage` is `nullopt` even for a populated row. Every row still
+/// carries the explicit null.
+struct RAYLIDAR_EXPORT RowMetrics
+{
+    std::uint32_t frame = 0;
+    std::uint16_t camera = 0;
+    rays::Bucket bucket = rays::Bucket::B0_20;
+    CellMetrics cell;
+    std::array<TauPrf, 3> prf{};
+    ChamferMetrics cd;
+};
+
+/// I/O-free end-to-end report.
+struct RAYLIDAR_EXPORT EvalReport
+{
+    CellMetrics micro_primary;
+    CellMetrics micro_secondary;
+    std::vector<FrameMetrics> per_frame;
+    std::vector<CameraMetrics> per_camera;
+    MacroSummary macro;
+    std::vector<RowMetrics> rows;
+};
+
+/// Evaluate every metric over `samples` and the supplied raw denominators.
+///
+/// The frame set is the union of `rawByFrame` frames and frames present in
+/// `samples`; rows cover every `(frame, camera in {0,1}, bucket in 0..3)`
+/// combination, including empty cells. Primary aggregates exclude `B50_60`.
+/// Throws `std::invalid_argument` on any sample rejected by `ValidateSamples`.
+RAYLIDAR_EXPORT EvalReport
+EvaluateAll(std::span<const RaySample> samples,
+            const std::vector<FrameRawCounts> &rawByFrame);
 } // namespace raylidar::eval

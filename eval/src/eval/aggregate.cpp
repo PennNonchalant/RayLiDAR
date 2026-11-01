@@ -77,6 +77,14 @@ void FillMeanStd(const std::span<const FrameMetrics> frames, Getter getter,
     meanOut = summary.mean;
     stdOut = summary.stddev;
 }
+
+void AssignMeanStd(const std::vector<double> &values, std::optional<double> &meanOut,
+                   std::optional<double> &stdOut)
+{
+    const MeanStd summary = MeanAndSampleStd(values);
+    meanOut = summary.mean;
+    stdOut = summary.stddev;
+}
 } // namespace
 
 CellMetrics AggregateCell(const std::span<const RaySample> samples, const RawCounts &raw)
@@ -226,5 +234,146 @@ MacroSummary SummarizeMacro(const std::span<const FrameMetrics> frames)
     FillMeanStd(frames, [](const FrameMetrics &f) { return f.primary.coverage; },
                 summary.coverage_mean, summary.coverage_std);
     return summary;
+}
+
+EvalReport EvaluateAll(const std::span<const RaySample> samples,
+                       const std::vector<FrameRawCounts> &rawByFrame)
+{
+    ValidateSamples(samples);
+
+    // Frame set = supplied raw frames plus any frame observed in the samples.
+    std::map<std::uint32_t, RawCounts> frameRaw;
+    for (const auto &entry : rawByFrame)
+    {
+        frameRaw[entry.frame] = entry.raw;
+    }
+    for (const auto &sample : samples)
+    {
+        frameRaw.try_emplace(sample.frame);
+    }
+
+    std::vector<FrameRawCounts> completeRaw;
+    completeRaw.reserve(frameRaw.size());
+    for (const auto &[frame, raw] : frameRaw)
+    {
+        completeRaw.push_back(FrameRawCounts{frame, raw});
+    }
+
+    std::vector<RaySample> primarySamples;
+    std::vector<RaySample> secondarySamples;
+    primarySamples.reserve(samples.size());
+    for (const auto &sample : samples)
+    {
+        if (sample.bucket == rays::Bucket::B50_60)
+        {
+            secondarySamples.push_back(sample);
+        }
+        else
+        {
+            primarySamples.push_back(sample);
+        }
+    }
+
+    RawCounts primaryRaw;
+    RawCounts secondaryRaw;
+    for (const auto &entry : rawByFrame)
+    {
+        for (std::size_t index = 0; index < 3U; ++index)
+        {
+            primaryRaw.raw_bucket[index] += entry.raw.raw_bucket[index];
+            primaryRaw.raw_total += entry.raw.raw_bucket[index];
+        }
+        secondaryRaw.raw_bucket[3] += entry.raw.raw_bucket[3];
+        secondaryRaw.raw_total += entry.raw.raw_bucket[3];
+    }
+
+    EvalReport report;
+    report.micro_primary = AggregateCell(primarySamples, primaryRaw);
+    report.micro_secondary = AggregateCell(secondarySamples, secondaryRaw);
+    report.per_frame = AggregatePerFrame(samples, completeRaw);
+    report.per_camera = AggregatePerCamera(samples);
+    report.macro = SummarizeMacro(report.per_frame);
+
+    // Extend the macro block with the per-frame primary-tau P/R/F.
+    std::vector<double> precisions;
+    std::vector<double> recalls;
+    std::vector<double> fScores;
+    precisions.reserve(completeRaw.size());
+    recalls.reserve(completeRaw.size());
+    fScores.reserve(completeRaw.size());
+    for (const auto &entry : completeRaw)
+    {
+        std::vector<RaySample> framePrimary;
+        for (const auto &sample : samples)
+        {
+            if (sample.frame == entry.frame && sample.bucket != rays::Bucket::B50_60)
+            {
+                framePrimary.push_back(sample);
+            }
+        }
+        const auto predicted = PredictedPoints(framePrimary);
+        const auto gt = GtPoints(framePrimary);
+        const PrfMetrics prf = ComputePrfMetrics(predicted, gt, kPrimaryTauM, false);
+        if (prf.precision.has_value())
+        {
+            precisions.push_back(*prf.precision);
+        }
+        if (prf.recall.has_value())
+        {
+            recalls.push_back(*prf.recall);
+        }
+        if (prf.f_score.has_value())
+        {
+            fScores.push_back(*prf.f_score);
+        }
+    }
+    AssignMeanStd(precisions, report.macro.precision_mean, report.macro.precision_std);
+    AssignMeanStd(recalls, report.macro.recall_mean, report.macro.recall_std);
+    AssignMeanStd(fScores, report.macro.f_score_mean, report.macro.f_score_std);
+
+    // One row per frame x camera x bucket, including empty cells.
+    report.rows.reserve(completeRaw.size() * 8U);
+    for (const auto &entry : completeRaw)
+    {
+        for (std::uint16_t camera = 0; camera < 2U; ++camera)
+        {
+            for (int bucketIndex = 0; bucketIndex < 4; ++bucketIndex)
+            {
+                RowMetrics row;
+                row.frame = entry.frame;
+                row.camera = camera;
+                row.bucket = static_cast<rays::Bucket>(bucketIndex);
+
+                std::vector<RaySample> rowSamples;
+                for (const auto &sample : samples)
+                {
+                    if (sample.frame == entry.frame && sample.camera == camera &&
+                        static_cast<int>(sample.bucket) == bucketIndex)
+                    {
+                        rowSamples.push_back(sample);
+                    }
+                }
+
+                // Per-camera raw denominators are not part of the frozen input,
+                // so the row carries an explicit null coverage.
+                row.cell = AggregateCell(rowSamples, RawCounts{});
+
+                const auto predicted = PredictedPoints(rowSamples);
+                const auto gt = GtPoints(rowSamples);
+                for (std::size_t tauIndex = 0; tauIndex < kTausM.size(); ++tauIndex)
+                {
+                    row.prf[tauIndex].tau = kTausM[tauIndex];
+                    row.prf[tauIndex].nearest =
+                        ComputePrfMetrics(predicted, gt, kTausM[tauIndex], false);
+                    row.prf[tauIndex].greedy =
+                        ComputePrfMetrics(predicted, gt, kTausM[tauIndex], true);
+                }
+                row.cd = ComputeChamferMetrics(predicted, gt);
+
+                report.rows.push_back(std::move(row));
+            }
+        }
+    }
+    return report;
 }
 } // namespace raylidar::eval

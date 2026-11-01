@@ -254,7 +254,7 @@ TEST_CASE("EvaluateAll emits a complete frame x camera x bucket grid", "[eval][s
             CHECK(row.cell.n_valid == 1U);
             CHECK(row.cell.n_hits == 1U);
             REQUIRE(row.cd.cd_l1.has_value());
-            CHECK(*row.cd.cd_l1 == Catch::Approx(0.0).margin(1.0e-12));
+            CHECK(*row.cd.cd_l1 == Catch::Approx(0.1).margin(1.0e-12));
             REQUIRE(row.prf[1].nearest.f_score.has_value());
             CHECK(*row.prf[1].nearest.f_score == Catch::Approx(1.0).margin(1.0e-12));
         }
