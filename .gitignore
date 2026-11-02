@@ -99,3 +99,6 @@ AGENTS.md
 # Generated data/artifacts (live on /data-20T, never in the repo)
 artifacts/
 staging/
+
+# Root C++ test tree is out of scope for the reconstruction-only package.
+/tests/
