@@ -63,7 +63,8 @@ jobs:
         run: |
           $sources = git ls-files -- '*.cpp' '*.cc' '*.cxx'
           foreach ($source in $sources) {
-            & clang-tidy --quiet -p build/windows-debug $source
+            # Clang cannot read MSVC PCH files; /Y- preserves forced includes.
+            & clang-tidy --quiet -p build/windows-debug --extra-arg=/Y- $source
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 

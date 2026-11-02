@@ -1,35 +1,19 @@
-#include <vulkan/vulkan_raii.hpp>
+#include "vulkan/Buffer.h"
+#include "vulkan/CommandContext.h"
+#include "vulkan/ComputePipeline.h"
+#include "vulkan/DescriptorBindings.h"
+#include "vulkan/Shader.h"
+#include "vulkan/VulkanContext.h"
 
-#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
-#include <fstream>
+#include <exception>
 #include <iostream>
+#include <span>
 #include <stdexcept>
-#include <string_view>
-#include <vector>
-
-std::vector<std::uint32_t> ReadShader(const char *path)
-{
-    std::ifstream stream(path, std::ios::binary | std::ios::ate);
-    if (!stream)
-    {
-        throw std::runtime_error("Cannot open SPIR-V file.");
-    }
-
-    const auto size = stream.tellg();
-    if (size <= 0 || static_cast<std::size_t>(size) % sizeof(std::uint32_t) != 0)
-    {
-        throw std::runtime_error("Invalid SPIR-V file size.");
-    }
-
-    std::vector<std::uint32_t> code(static_cast<std::size_t>(size) / sizeof(std::uint32_t));
-    stream.seekg(0);
-    if (!stream.read(reinterpret_cast<char *>(code.data()), size))
-    {
-        throw std::runtime_error("Cannot read SPIR-V file.");
-    }
-    return code;
-}
+#include <string>
+#include <utility>
 
 int main(int argc, char *argv[])
 {
@@ -37,125 +21,164 @@ int main(int argc, char *argv[])
     {
         if (argc != 2)
         {
-            throw std::runtime_error("Usage: raylidar_smoke <shader.spv>");
+            throw std::invalid_argument("Usage: raylidar_smoke <shader.spv>");
         }
 
-        const auto code = ReadShader(argv[1]);
-        const vk::raii::Context context;
-        if (context.enumerateInstanceVersion() < VK_API_VERSION_1_4)
         {
-            throw std::runtime_error("Vulkan 1.4 loader required.");
-        }
+            raylidar::vulkan::ContextDescription description;
+            description.ApplicationName = "RayLiDAR Vulkan Smoke";
+            description.EnableValidationLayers = true;
 
-        const vk::ApplicationInfo application("RayLiDAR Smoke", 1, nullptr, 0, VK_API_VERSION_1_4);
-        const vk::raii::Instance instance(context, vk::InstanceCreateInfo({}, &application));
-        const std::vector<const char *> extensions = {VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-                                                      VK_KHR_RAY_QUERY_EXTENSION_NAME,
-                                                      VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME};
+            const raylidar::vulkan::VulkanContext context(description);
 
-        for (const auto &physicalDevice : instance.enumeratePhysicalDevices())
-        {
-            const auto properties = physicalDevice.getProperties();
-            const auto available = physicalDevice.enumerateDeviceExtensionProperties();
-            std::cout << "Device: " << properties.deviceName.data() << " | Vulkan "
-                      << VK_API_VERSION_MAJOR(properties.apiVersion) << '.'
+            const auto &properties = context.PhysicalDeviceProperties();
+
+            std::cout << "Device: " << properties.deviceName.data() << '\n'
+                      << "Vulkan: " << VK_API_VERSION_MAJOR(properties.apiVersion) << '.'
                       << VK_API_VERSION_MINOR(properties.apiVersion) << '.'
-                      << VK_API_VERSION_PATCH(properties.apiVersion) << '\n';
-            if (properties.apiVersion < VK_API_VERSION_1_4)
+                      << VK_API_VERSION_PATCH(properties.apiVersion) << '\n'
+                      << "Compute queue family: " << context.ComputeQueueFamilyIndex() << '\n'
+                      << "AS scratch alignment: "
+                      << context.AccelerationStructureProperties().minAccelerationStructureScratchOffsetAlignment
+                      << '\n';
+
+            const raylidar::vulkan::Shader shader(context, argv[1]);
+
+            raylidar::vulkan::ComputePipelineDescription pipelineDescription;
+            pipelineDescription.DescriptorSets.resize(2);
+
+            for (auto &setDescription : pipelineDescription.DescriptorSets)
             {
-                std::cout << "  Skipped: Vulkan 1.4 required.\n";
-                continue;
+                setDescription.Bindings.emplace_back(0, vk::DescriptorType::eStorageBuffer, 1,
+                                                     vk::ShaderStageFlagBits::eCompute);
             }
 
-            bool hasExtensions = true;
-            for (const char *name : extensions)
+            const raylidar::vulkan::ComputePipeline pipeline(context, shader, pipelineDescription);
+
+            const std::array<std::array<std::uint32_t, 4>, 2> inputs = {{
+                {1, 2, 3, 4},
+                {10, 20, 30, 40},
+            }};
+
+            const std::array<std::array<std::uint32_t, 4>, 2> expectedResults = {{
+                {3, 5, 7, 9},
+                {21, 41, 61, 81},
+            }};
+
+            const vk::DeviceSize byteCount = static_cast<vk::DeviceSize>(std::as_bytes(std::span(inputs[0])).size());
+
+            raylidar::vulkan::BufferDescription uploadDescription;
+            uploadDescription.Size = byteCount;
+            uploadDescription.Usage = vk::BufferUsageFlagBits::eTransferSrc;
+            uploadDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Upload;
+
+            raylidar::vulkan::Buffer initialUploadBuffer(context, uploadDescription);
+            const vk::Buffer originalHandle = initialUploadBuffer.Handle();
+
+            raylidar::vulkan::Buffer movedUploadBuffer(std::move(initialUploadBuffer));
+
+            raylidar::vulkan::Buffer uploadBuffer(context, uploadDescription);
+            uploadBuffer = std::move(movedUploadBuffer);
+
+            if (uploadBuffer.Handle() != originalHandle || uploadBuffer.Size() != byteCount)
             {
-                if (!std::ranges::any_of(available, [&](const auto &extension) {
-                        return std::string_view(extension.extensionName.data()) == name;
-                    }))
+                throw std::runtime_error("Buffer move failed.");
+            }
+
+            raylidar::vulkan::BufferDescription inputDescription;
+            inputDescription.Size = byteCount;
+            inputDescription.Usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer;
+
+            const raylidar::vulkan::Buffer inputBuffer(context, inputDescription);
+
+            raylidar::vulkan::BufferDescription outputDescription;
+            outputDescription.Size = byteCount;
+            outputDescription.Usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc;
+
+            const raylidar::vulkan::Buffer outputBuffer(context, outputDescription);
+
+            raylidar::vulkan::BufferDescription readbackDescription;
+            readbackDescription.Size = byteCount;
+            readbackDescription.Usage = vk::BufferUsageFlagBits::eTransferDst;
+            readbackDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Readback;
+
+            const raylidar::vulkan::Buffer readbackBuffer(context, readbackDescription);
+
+            raylidar::vulkan::DescriptorBindings bindings(context, pipeline);
+
+            if (bindings.Handles().size() != 2 || !bindings.Handle(0) || !bindings.Handle(1))
+            {
+                throw std::runtime_error("Descriptor set initialization failed.");
+            }
+
+            bindings.WriteBuffer(0, 0, inputBuffer);
+            bindings.WriteBuffer(1, 0, outputBuffer);
+
+            raylidar::vulkan::CommandContext commands(context);
+
+            for (std::size_t round = 0; round < inputs.size(); ++round)
+            {
+                const auto &input = inputs[round];
+                uploadBuffer.Write(std::as_bytes(std::span(input)));
+
+                const auto &commandBuffer = commands.Begin();
+
+                const auto barrier =
+                    [&commandBuffer](vk::PipelineStageFlags2 sourceStage, vk::AccessFlags2 sourceAccess,
+                                     vk::PipelineStageFlags2 destinationStage, vk::AccessFlags2 destinationAccess) {
+                        vk::MemoryBarrier2 memoryBarrier;
+                        memoryBarrier.setSrcStageMask(sourceStage)
+                            .setSrcAccessMask(sourceAccess)
+                            .setDstStageMask(destinationStage)
+                            .setDstAccessMask(destinationAccess);
+
+                        vk::DependencyInfo dependencyInformation;
+                        dependencyInformation.setMemoryBarriers(memoryBarrier);
+
+                        commandBuffer.pipelineBarrier2(dependencyInformation);
+                    };
+
+                const vk::BufferCopy copyRegion(0, 0, byteCount);
+
+                commandBuffer.copyBuffer(uploadBuffer.Handle(), inputBuffer.Handle(), copyRegion);
+
+                barrier(vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+                        vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+
+                commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.Handle());
+                commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.Layout(), 0,
+                                                 bindings.Handles(), {});
+                commandBuffer.dispatch(static_cast<std::uint32_t>(input.size()), 1, 1);
+
+                barrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+
+                commandBuffer.copyBuffer(outputBuffer.Handle(), readbackBuffer.Handle(), copyRegion);
+
+                barrier(vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+                        vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
+
+                commands.End();
+                commands.SubmitAndWait();
+
+                std::array<std::uint32_t, 4> result{};
+                readbackBuffer.Read(std::as_writable_bytes(std::span(result)));
+
+                if (result != expectedResults[round])
                 {
-                    std::cout << "  Missing extension: " << name << '\n';
-                    hasExtensions = false;
+                    throw std::runtime_error("Compute result mismatch in round " + std::to_string(round + 1) + ".");
                 }
+
+                std::cout << "Round " << round + 1 << " passed.\n";
             }
-            if (!hasExtensions)
-            {
-                continue;
-            }
-
-            const auto features = physicalDevice.getFeatures2<
-                vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features,
-                vk::PhysicalDeviceAccelerationStructureFeaturesKHR, vk::PhysicalDeviceRayQueryFeaturesKHR>();
-            if (!features.get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress ||
-                !features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering ||
-                !features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2 ||
-                !features.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure ||
-                !features.get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery)
-            {
-                std::cout << "  Required features: bufferDeviceAddress="
-                          << features.get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress
-                          << ", dynamicRendering="
-                          << features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering
-                          << ", synchronization2="
-                          << features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2
-                          << ", accelerationStructure="
-                          << features.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure
-                          << ", rayQuery=" << features.get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery << '\n';
-                continue;
-            }
-
-            const auto queues = physicalDevice.getQueueFamilyProperties();
-            const auto queue = std::ranges::find_if(queues, [](const auto &family) {
-                return family.queueCount > 0 && (family.queueFlags & vk::QueueFlagBits::eCompute);
-            });
-            if (queue == queues.end())
-            {
-                std::cout << "  Skipped: no compute queue.\n";
-                continue;
-            }
-
-            const auto queueIndex = static_cast<std::uint32_t>(queue - queues.begin());
-            const float priority = 1.0f;
-            const vk::DeviceQueueCreateInfo queueInfo({}, queueIndex, 1, &priority);
-            vk::StructureChain<vk::DeviceCreateInfo, vk::PhysicalDeviceVulkan12Features,
-                               vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
-                               vk::PhysicalDeviceRayQueryFeaturesKHR>
-                deviceInfo;
-            deviceInfo.get<vk::DeviceCreateInfo>().setQueueCreateInfos(queueInfo).setPEnabledExtensionNames(extensions);
-            deviceInfo.get<vk::PhysicalDeviceVulkan12Features>().setBufferDeviceAddress(true);
-            deviceInfo.get<vk::PhysicalDeviceVulkan13Features>().setDynamicRendering(true).setSynchronization2(true);
-            deviceInfo.get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().setAccelerationStructure(true);
-            deviceInfo.get<vk::PhysicalDeviceRayQueryFeaturesKHR>().setRayQuery(true);
-
-            const vk::raii::Device device(physicalDevice, deviceInfo.get<vk::DeviceCreateInfo>());
-            const vk::raii::ShaderModule shader(device, vk::ShaderModuleCreateInfo({}, code));
-            const vk::raii::PipelineLayout layout(device, vk::PipelineLayoutCreateInfo());
-            const vk::PipelineShaderStageCreateInfo stage({}, vk::ShaderStageFlagBits::eCompute, *shader, "main");
-            const vk::raii::Pipeline pipeline(device, nullptr, vk::ComputePipelineCreateInfo({}, stage, *layout));
-            const vk::raii::CommandPool pool(device, vk::CommandPoolCreateInfo({}, queueIndex));
-            auto commands = device.allocateCommandBuffers(
-                vk::CommandBufferAllocateInfo(*pool, vk::CommandBufferLevel::ePrimary, 1));
-            commands.front().begin(vk::CommandBufferBeginInfo(vk::CommandBufferUsageFlagBits::eOneTimeSubmit));
-            commands.front().bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
-            commands.front().dispatch(1, 1, 1);
-            commands.front().end();
-            const vk::raii::Queue computeQueue(device, queueIndex, 0);
-            const vk::CommandBufferSubmitInfo commandInfo(*commands.front());
-            vk::SubmitInfo2 submitInfo;
-            submitInfo.setCommandBufferInfos(commandInfo);
-            computeQueue.submit2(submitInfo);
-            computeQueue.waitIdle();
-
-            std::cout << "PASS: " << properties.deviceName.data()
-                      << " | Vulkan 1.4, ray query, dynamic rendering, Slang compute dispatch\n";
-            return 0;
         }
 
-        throw std::runtime_error("No Vulkan 1.4 device with the required ray query features and compute queue found.");
+        std::cout << "Vulkan smoke completed; all resources destroyed.\n";
+        return 0;
     }
     catch (const std::exception &exception)
     {
-        std::cerr << exception.what() << '\n';
+        std::cerr << "Vulkan smoke failed: " << exception.what() << '\n';
         return 1;
     }
 }

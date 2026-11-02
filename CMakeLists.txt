@@ -13,18 +13,25 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 
+
+find_package(VulkanHeaders 1.4 CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+
 enable_testing()
 add_subdirectory(src)
 add_subdirectory(apps/cli)
 
-find_package(VulkanHeaders 1.4 CONFIG REQUIRED)
 include(cmake/SlangShaders.cmake)
 
-add_executable(raylidar_smoke apps/smoke/main.cpp)
-target_compile_features(raylidar_smoke PRIVATE cxx_std_20)
-target_link_libraries(raylidar_smoke PRIVATE Vulkan::Headers ${CMAKE_DL_LIBS})
+add_executable(raylidar_smoke
+    apps/smoke/main.cpp
+)
 
-foreach(target IN ITEMS raylidar raylidar_cli raylidar_smoke)
+target_link_libraries(raylidar_smoke PRIVATE
+    raylidar_vulkan
+)
+
+foreach(target IN ITEMS raylidar_vulkan raylidar raylidar_cli raylidar_smoke)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc /utf-8)
     else()
@@ -37,5 +44,13 @@ set(SHADER_BINARY_DIR "${PROJECT_BINARY_DIR}/shaders")
 raylidar_add_shaders(raylidar_shaders "${SHADER_SOURCE_DIR}" "${SHADER_BINARY_DIR}")
 add_dependencies(raylidar_smoke raylidar_shaders)
 
-add_test(NAME vulkan_smoke COMMAND raylidar_smoke "${SHADER_BINARY_DIR}/Smoke.spv")
-set_tests_properties(vulkan_smoke PROPERTIES TIMEOUT 30 LABELS gpu)
+add_test(
+    NAME vulkan_context_smoke
+    COMMAND raylidar_smoke "${SHADER_BINARY_DIR}/Smoke.spv"
+)
+
+set_tests_properties(vulkan_context_smoke PROPERTIES
+    TIMEOUT 30
+    LABELS "gpu;vulkan"
+    FAIL_REGULAR_EXPRESSION "\\[Vulkan\\]\\[error\\]"
+)
