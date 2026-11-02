@@ -68,6 +68,27 @@ ctest --preset windows-debug
 
 The `raylidar` shared library and `raylidar_cli` targets produce `raylidar.dll` and `raylidar_cli.exe` together in `build/windows-debug/`. The CLI currently supports `--help` and `--version`; CTest runs the configured tests. Use `windows-release` for an optimized build. In Visual Studio, open the repository folder, select a preset and executable target, then build and run.
 
+## C++ Naming
+
+`.clang-tidy` enforces these conventions for project-owned C++ code;
+`.clang-format` controls layout.
+
+| Category | Convention | Example |
+| --- | --- | --- |
+| Public non-static fields in structs and classes | PascalCase | `ApplicationName` |
+| Private/protected non-static fields | `m_` + camelCase | `m_applicationName` |
+| Static mutable members, at any access level | `s_` + camelCase | `s_instanceCount` |
+| Static const/constexpr members, at any access level | `k` + PascalCase | `kMaxBufferSize` |
+| Global/namespace mutable variables | `g_` + camelCase | `g_activeContext` |
+| Global/namespace const/constexpr objects | `k` + PascalCase | `kDefaultTimeout` |
+| Locals and parameters, including const/constexpr and function-local statics | camelCase | `bufferSize` |
+| Types, aliases, type and template-template parameters | PascalCase | `BufferDescription`, `ElementType` |
+| Non-type template parameters | camelCase | `elementCount` |
+| Functions and methods | PascalCase | `CreateBuffer` |
+| Enum values | PascalCase, without `k` | `MemoryUsage::GpuOnly` |
+| Namespaces | lowercase with underscores if needed | `raylidar`, `memory_detail` |
+| Project macros | `RAYLIDAR_` + UPPER_SNAKE_CASE | `RAYLIDAR_ENABLE_VALIDATION` |
+
 ## Run Checks
 
 After configuring and building, run from an **x64 VS Developer PowerShell** at the repository root:
