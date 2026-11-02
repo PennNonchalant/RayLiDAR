@@ -29,9 +29,10 @@ add_executable(raylidar_smoke
 
 target_link_libraries(raylidar_smoke PRIVATE
     raylidar_vulkan
+    raylidar_rt
 )
 
-foreach(target IN ITEMS raylidar_vulkan raylidar raylidar_cli raylidar_smoke)
+foreach(target IN ITEMS raylidar_vulkan raylidar_rt raylidar raylidar_cli raylidar_smoke)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc /utf-8)
     else()

@@ -1,3 +1,5 @@
+#include "rt/AccelerationStructure.h"
+
 #include "vulkan/Buffer.h"
 #include "vulkan/CommandContext.h"
 #include "vulkan/ComputePipeline.h"
@@ -41,6 +43,46 @@ int main(int argc, char *argv[])
                       << "AS scratch alignment: "
                       << context.AccelerationStructureProperties().minAccelerationStructureScratchOffsetAlignment
                       << '\n';
+
+            {
+                raylidar::rt::AccelerationStructureDescription blasDescription;
+                blasDescription.Type = vk::AccelerationStructureTypeKHR::eBottomLevel;
+                blasDescription.Size = 4095;
+
+                raylidar::rt::AccelerationStructure initialBlas(context, blasDescription);
+
+                const vk::AccelerationStructureKHR originalHandle = initialBlas.Handle();
+                const vk::DeviceAddress originalAddress = initialBlas.DeviceAddress();
+
+                if (!originalHandle || originalAddress == 0 || initialBlas.Type() != blasDescription.Type ||
+                    initialBlas.Size() != blasDescription.Size)
+                {
+                    throw std::runtime_error("Acceleration structure initialization failed.");
+                }
+
+                raylidar::rt::AccelerationStructure movedBlas(std::move(initialBlas));
+
+                if (movedBlas.Handle() != originalHandle || movedBlas.DeviceAddress() != originalAddress ||
+                    movedBlas.Type() != blasDescription.Type || movedBlas.Size() != blasDescription.Size)
+                {
+                    throw std::runtime_error("Acceleration structure move construction failed.");
+                }
+
+                raylidar::rt::AccelerationStructureDescription targetDescription;
+                targetDescription.Type = vk::AccelerationStructureTypeKHR::eTopLevel;
+                targetDescription.Size = 8192;
+
+                raylidar::rt::AccelerationStructure target(context, targetDescription);
+                target = std::move(movedBlas);
+
+                if (target.Handle() != originalHandle || target.DeviceAddress() != originalAddress ||
+                    target.Type() != blasDescription.Type || target.Size() != blasDescription.Size)
+                {
+                    throw std::runtime_error("Acceleration structure move assignment failed.");
+                }
+            }
+
+            std::cout << "Acceleration structure resource smoke passed.\n";
 
             const raylidar::vulkan::Shader shader(context, argv[1]);
 
