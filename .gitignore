@@ -104,3 +104,6 @@ staging/
 docs_local/
 tools/mesh/reconstruct/viz.py
 scripts/export_phase4_bundle.py
+
+# Root C++ test tree is out of scope for the reconstruction-only package.
+/tests/
