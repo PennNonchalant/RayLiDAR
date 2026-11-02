@@ -1,16 +1,18 @@
 #include "vulkan/Buffer.h"
+#include "vulkan/CommandContext.h"
 #include "vulkan/ComputePipeline.h"
 #include "vulkan/DescriptorBindings.h"
 #include "vulkan/Shader.h"
 #include "vulkan/VulkanContext.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <limits>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 int main(int argc, char *argv[])
@@ -24,20 +26,10 @@ int main(int argc, char *argv[])
 
         {
             raylidar::vulkan::ContextDescription description;
-            description.ApplicationName = "RayLiDAR Context Smoke";
+            description.ApplicationName = "RayLiDAR Vulkan Smoke";
             description.EnableValidationLayers = true;
 
             const raylidar::vulkan::VulkanContext context(description);
-
-            if (!*context.Device() || !*context.ComputeQueue() || !context.Allocator())
-            {
-                throw std::runtime_error("Context contains a null device, queue, or allocator.");
-            }
-
-            if (context.ComputeQueueFamilyIndex() == std::numeric_limits<std::uint32_t>::max())
-            {
-                throw std::runtime_error("Compute queue family index was not initialized.");
-            }
 
             const auto &properties = context.PhysicalDeviceProperties();
 
@@ -50,83 +42,138 @@ int main(int argc, char *argv[])
                       << context.AccelerationStructureProperties().minAccelerationStructureScratchOffsetAlignment
                       << '\n';
 
+            const raylidar::vulkan::Shader shader(context, argv[1]);
+
+            raylidar::vulkan::ComputePipelineDescription pipelineDescription;
+            pipelineDescription.DescriptorSets.resize(2);
+
+            for (auto &setDescription : pipelineDescription.DescriptorSets)
             {
-                const std::array<std::uint32_t, 4> data = {1, 2, 3, 4};
-                const auto bytes = std::as_bytes(std::span(data));
-
-                raylidar::vulkan::BufferDescription bufferDescription;
-                bufferDescription.Size = static_cast<vk::DeviceSize>(bytes.size());
-                bufferDescription.Usage = vk::BufferUsageFlagBits::eTransferSrc;
-                bufferDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Upload;
-
-                raylidar::vulkan::Buffer buffer(context, bufferDescription);
-                buffer.Write(bytes);
-
-                const vk::Buffer originalHandle = buffer.Handle();
-
-                // Move construction.
-                raylidar::vulkan::Buffer movedBuffer(std::move(buffer));
-
-                // Move assignment also releases the destination's previous allocation.
-                raylidar::vulkan::Buffer assignedBuffer(context, bufferDescription);
-                assignedBuffer = std::move(movedBuffer);
-
-                if (!assignedBuffer.Handle() || assignedBuffer.Handle() != originalHandle ||
-                    assignedBuffer.Size() != bufferDescription.Size)
-                {
-                    throw std::runtime_error("Buffer initialization or move failed.");
-                }
-
-                // Confirm the destination remains usable after moving.
-                assignedBuffer.Write(bytes);
+                setDescription.Bindings.emplace_back(0, vk::DescriptorType::eStorageBuffer, 1,
+                                                     vk::ShaderStageFlagBits::eCompute);
             }
 
-            std::cout << "Buffer creation, write, move, and destruction completed.\n";
+            const raylidar::vulkan::ComputePipeline pipeline(context, shader, pipelineDescription);
 
+            const std::array<std::array<std::uint32_t, 4>, 2> inputs = {{
+                {1, 2, 3, 4},
+                {10, 20, 30, 40},
+            }};
+
+            const std::array<std::array<std::uint32_t, 4>, 2> expectedResults = {{
+                {3, 5, 7, 9},
+                {21, 41, 61, 81},
+            }};
+
+            const vk::DeviceSize byteCount = static_cast<vk::DeviceSize>(std::as_bytes(std::span(inputs[0])).size());
+
+            raylidar::vulkan::BufferDescription uploadDescription;
+            uploadDescription.Size = byteCount;
+            uploadDescription.Usage = vk::BufferUsageFlagBits::eTransferSrc;
+            uploadDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Upload;
+
+            raylidar::vulkan::Buffer initialUploadBuffer(context, uploadDescription);
+            const vk::Buffer originalHandle = initialUploadBuffer.Handle();
+
+            raylidar::vulkan::Buffer movedUploadBuffer(std::move(initialUploadBuffer));
+
+            raylidar::vulkan::Buffer uploadBuffer(context, uploadDescription);
+            uploadBuffer = std::move(movedUploadBuffer);
+
+            if (uploadBuffer.Handle() != originalHandle || uploadBuffer.Size() != byteCount)
             {
-                const raylidar::vulkan::Shader shader(context, argv[1]);
-
-                raylidar::vulkan::ComputePipelineDescription pipelineDescription;
-                pipelineDescription.DescriptorSets.resize(2);
-
-                for (auto &setDescription : pipelineDescription.DescriptorSets)
-                {
-                    setDescription.Bindings.emplace_back(0, vk::DescriptorType::eStorageBuffer, 1,
-                                                         vk::ShaderStageFlagBits::eCompute);
-                }
-
-                const raylidar::vulkan::ComputePipeline pipeline(context, shader, pipelineDescription);
-
-                if (!shader.Handle() || !pipeline.Handle() || !pipeline.Layout())
-                {
-                    throw std::runtime_error("Shader or compute pipeline initialization failed.");
-                }
-
-                raylidar::vulkan::BufferDescription bufferDescription;
-                bufferDescription.Size = 16;
-                bufferDescription.Usage = vk::BufferUsageFlagBits::eStorageBuffer;
-
-                const raylidar::vulkan::Buffer buffer(context, bufferDescription);
-
-                raylidar::vulkan::DescriptorBindings bindings(context, pipeline);
-
-                if (bindings.Handles().size() != 2 || !bindings.Handle(0) || !bindings.Handle(1))
-                {
-                    throw std::runtime_error("Descriptor set initialization failed.");
-                }
-
-                bindings.WriteBuffer(0, 0, buffer);
-                bindings.WriteBuffer(1, 0, buffer);
+                throw std::runtime_error("Buffer move failed.");
             }
 
-            std::cout << "Shader, compute pipeline, and descriptor bindings creation and destruction completed.\n"
-                      << "Two descriptor sets allocated and written.\n";
+            raylidar::vulkan::BufferDescription inputDescription;
+            inputDescription.Size = byteCount;
+            inputDescription.Usage = vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer;
 
-            context.WaitIdle();
+            const raylidar::vulkan::Buffer inputBuffer(context, inputDescription);
+
+            raylidar::vulkan::BufferDescription outputDescription;
+            outputDescription.Size = byteCount;
+            outputDescription.Usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc;
+
+            const raylidar::vulkan::Buffer outputBuffer(context, outputDescription);
+
+            raylidar::vulkan::BufferDescription readbackDescription;
+            readbackDescription.Size = byteCount;
+            readbackDescription.Usage = vk::BufferUsageFlagBits::eTransferDst;
+            readbackDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Readback;
+
+            const raylidar::vulkan::Buffer readbackBuffer(context, readbackDescription);
+
+            raylidar::vulkan::DescriptorBindings bindings(context, pipeline);
+
+            if (bindings.Handles().size() != 2 || !bindings.Handle(0) || !bindings.Handle(1))
+            {
+                throw std::runtime_error("Descriptor set initialization failed.");
+            }
+
+            bindings.WriteBuffer(0, 0, inputBuffer);
+            bindings.WriteBuffer(1, 0, outputBuffer);
+
+            raylidar::vulkan::CommandContext commands(context);
+
+            for (std::size_t round = 0; round < inputs.size(); ++round)
+            {
+                const auto &input = inputs[round];
+                uploadBuffer.Write(std::as_bytes(std::span(input)));
+
+                const auto &commandBuffer = commands.Begin();
+
+                const auto barrier =
+                    [&commandBuffer](vk::PipelineStageFlags2 sourceStage, vk::AccessFlags2 sourceAccess,
+                                     vk::PipelineStageFlags2 destinationStage, vk::AccessFlags2 destinationAccess) {
+                        vk::MemoryBarrier2 memoryBarrier;
+                        memoryBarrier.setSrcStageMask(sourceStage)
+                            .setSrcAccessMask(sourceAccess)
+                            .setDstStageMask(destinationStage)
+                            .setDstAccessMask(destinationAccess);
+
+                        vk::DependencyInfo dependencyInformation;
+                        dependencyInformation.setMemoryBarriers(memoryBarrier);
+
+                        commandBuffer.pipelineBarrier2(dependencyInformation);
+                    };
+
+                const vk::BufferCopy copyRegion(0, 0, byteCount);
+
+                commandBuffer.copyBuffer(uploadBuffer.Handle(), inputBuffer.Handle(), copyRegion);
+
+                barrier(vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+                        vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
+
+                commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.Handle());
+                commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.Layout(), 0,
+                                                 bindings.Handles(), {});
+                commandBuffer.dispatch(static_cast<std::uint32_t>(input.size()), 1, 1);
+
+                barrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+
+                commandBuffer.copyBuffer(outputBuffer.Handle(), readbackBuffer.Handle(), copyRegion);
+
+                barrier(vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+                        vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
+
+                commands.End();
+                commands.SubmitAndWait();
+
+                std::array<std::uint32_t, 4> result{};
+                readbackBuffer.Read(std::as_writable_bytes(std::span(result)));
+
+                if (result != expectedResults[round])
+                {
+                    throw std::runtime_error("Compute result mismatch in round " + std::to_string(round + 1) + ".");
+                }
+
+                std::cout << "Round " << round + 1 << " passed.\n";
+            }
         }
 
-        // Context destruction has completed.
-        std::cout << "Context initialization and destruction completed.\n";
+        std::cout << "Vulkan smoke completed; all resources destroyed.\n";
         return 0;
     }
     catch (const std::exception &exception)

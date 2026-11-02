@@ -42,6 +42,7 @@ endforeach()
 set(SHADER_SOURCE_DIR "${PROJECT_SOURCE_DIR}/shaders")
 set(SHADER_BINARY_DIR "${PROJECT_BINARY_DIR}/shaders")
 raylidar_add_shaders(raylidar_shaders "${SHADER_SOURCE_DIR}" "${SHADER_BINARY_DIR}")
+add_dependencies(raylidar_smoke raylidar_shaders)
 
 add_test(
     NAME vulkan_context_smoke
