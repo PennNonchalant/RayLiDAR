@@ -70,3 +70,32 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Local-only working directories (kept out of the repository)
+docs-local/
+.planning/
+.git/
+
+# Python / experiment data (from the project planning branch)
+__pycache__/
+*.pyc
+.venv/
+venv/
+runs/
+data/
+data-*/
+results/
+*.pt
+*.pth
+*.npz
+*.ply
+
+# Local agent instructions
+AGENTS.md
+
+# Local container configuration (never commit; may contain host paths)
+.env.container
+
+# Generated data/artifacts (live on /data-20T, never in the repo)
+artifacts/
+staging/

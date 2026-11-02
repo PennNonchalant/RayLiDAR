@@ -23,7 +23,6 @@ WarningsAsErrors: >-
   modernize-*
 
 HeaderFilterRegex: '(^|[\\/])(include[\\/]raylidar|src|apps|tests)[\\/]'
-ExcludeHeaderFilterRegex: '(^|[\\/])(build[^\\/]*|vcpkg_installed|_deps)[\\/]'
 
 CheckOptions:
   readability-identifier-naming.ClassCase: CamelCase

@@ -1,0 +1,38 @@
+# Phase 1 G1 frame/calibration contract. Values mirror configs/dataset.yaml.
+# The assertion tolerances are matched to the measured precision of the official
+# KITTI-360 source files (see docs/frames.md); do not tighten them to 1e-12.
+dataset_root: /data-20T/hybrid-lidar-sim/raw/kitti360
+sequence: 2013_05_28_drive_0000_sync
+cameras: [image_00, image_01]
+pose_lookup:
+  mode: nearest
+  max_delta_frames: 5
+seg_frame:
+  origin: median_camera_center
+frame_sampling:
+  mode: contiguous_window     # one local window, never first/middle/last
+  count: 3
+assertions:
+  # Tolerances are matched to the measured precision of the official source files.
+  # Measured on the real sequence: det(R_rect)-1 = 4.52e-7 and max|RᵀR-I| = 9.93e-7
+  # (perspective.txt, 9 significant digits); det(R)-1 <= 1.6e-10 and
+  # max|RᵀR-I| <= 1.4e-10 (poses.txt). A 1e-12 determinant gate is impossible.
+  roundtrip_atol: 1.0e-9        # camera-relative rigid transforms only (measured ~6e-11)
+  rotation_atol: 2.0e-6         # RᵀR = I on composed rotations (source precision ~1e-6)
+  rotation_det_atol: 2.0e-6     # det(R) = +1 on composed rotations (source precision ~5e-7)
+  cam0_world_atol: 1.0e-3       # measured max 4.7e-4 on frames 1..30
+  camera_height_m: [1.4, 1.9]
+  camera_height_stability_m: 0.1
+ground_estimate:
+  radius_m: [5.0, 30.0]
+  z_range_m: [-3.0, 1.0]
+  azimuth_bins: 240
+  trim_fraction: 0.7
+  min_inliers: 100
+overlay:
+  min_range_m: 10.0
+  max_range_m: 30.0
+  min_frames: 3
+  min_features: 5
+  max_offset_px: 2.0
+  image_margin_px: 5
