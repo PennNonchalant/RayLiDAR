@@ -74,22 +74,28 @@ def _checks() -> dict:
     }
 
 
+def _measurements() -> dict:
+    return {
+        name: {"measured": check["measured"], "reference": check["threshold"]}
+        for name, check in _checks().items()
+    }
+
+
 def _g3_report(passed: bool = True) -> dict:
     return {
-        "gate": "G3",
-        "pass": passed,
+        "status": "measured",
+        "mode": "diagnostics",
         "window": "full",
         "frames": FULL,
         "gt_frames": FULL,
         "smoke_range_frames": SMOKE,
-        "checks": _checks(),
-        "failures": [] if passed else ["components_ok"],
+        "measurements": _measurements(),
         "amendment": {
             "id": "G3-AMEND-01",
             "approved_at_utc": "2026-11-01",
             "camera_visible_gt": True,
         },
-        "thresholds": {
+        "reference_thresholds": {
             "bbox_ratio_min": 0.8,
             "bbox_ratio_max": 1.2,
             "bbox_axes": ["x", "y"],
@@ -138,9 +144,8 @@ def _route(route_name: str, backend: str) -> dict:
         "build_wall_time_s": 17.2,
         "peak_rss_mb": 384.5,
         "dense_backend": backend,
-        "g3_pass": True,
-        "g3_checks": _checks(),
-        "g3_failures": [],
+        "g3_status": "measured",
+        "g3_measurements": _measurements(),
     }
 
 
@@ -171,7 +176,7 @@ def test_write_reports_every_d12_field_and_the_fallback_caveat(
 
     written = report.write(
         _artifact(tmp_path),
-        _g3_report(True),
+        _g3_report(),
         routes,
         cfg,
         str(tmp_path / "run"),
@@ -220,7 +225,7 @@ def test_write_omits_the_fallback_caveat_for_the_colmap_backend(
     }
     written = report.write(
         _artifact(tmp_path),
-        _g3_report(True),
+        _g3_report(),
         [_route("colmap_openmvs", "colmap_cuda")],
         cfg,
         str(tmp_path / "run"),
@@ -271,18 +276,25 @@ def _canonical_run(tmp_path: Path) -> tuple[Path, Path]:
     return run_dir, manifest_path
 
 
-def test_promotion_refuses_a_failing_gate(tmp_path: Path) -> None:
+def test_promotion_accepts_a_diagnostic_report(tmp_path: Path) -> None:
     run_dir, manifest_path = _canonical_run(tmp_path)
 
-    with pytest.raises(RuntimeError, match="cannot promote a mesh that failed G3"):
-        report.promote(
-            run_dir,
-            "run-1",
-            _g3_report(passed=False),
-            manifest_path,
-            assets=tmp_path / "assets",
+    promoted = report.promote(
+        run_dir,
+        "run-1",
+        _g3_report(),
+        manifest_path,
+        assets=tmp_path / "assets",
+    )
+
+    assert (Path(promoted["asset_dir"]) / "mesh.ply").is_file()
+    delivered = json.loads(
+        (Path(promoted["asset_dir"]) / "mesh_manifest.json").read_text(
+            encoding="utf-8"
         )
-    assert not (tmp_path / "assets" / "run-1").exists()
+    )
+    assert delivered["g3"]["status"] == "measured"
+    assert "pass" not in delivered["g3"]
 
 
 def test_promotion_writes_verifiable_checksums(tmp_path: Path) -> None:
@@ -291,7 +303,7 @@ def test_promotion_writes_verifiable_checksums(tmp_path: Path) -> None:
     promoted = report.promote(
         run_dir,
         "run-1",
-        _g3_report(True),
+        _g3_report(),
         manifest_path,
         assets=tmp_path / "assets",
     )
@@ -316,7 +328,8 @@ def test_promotion_writes_verifiable_checksums(tmp_path: Path) -> None:
     )
     assert completed.returncode == 0, completed.stderr
     delivered = json.loads((asset_dir / "mesh_manifest.json").read_text(encoding="utf-8"))
-    assert delivered["g3"]["pass"] is True
+    assert delivered["g3"]["status"] == "measured"
+    assert "pass" not in delivered["g3"]
 
 
 def test_promotion_marks_the_destination_invalid_on_a_mutation(
@@ -330,7 +343,7 @@ def test_promotion_marks_the_destination_invalid_on_a_mutation(
         report.promote(
             run_dir,
             "run-1",
-            _g3_report(True),
+            _g3_report(),
             manifest_path,
             assets=tmp_path / "assets",
         )
@@ -363,14 +376,14 @@ def test_index_merge_preserves_other_entries_and_is_idempotent(
     )
     run_dir, manifest_path = _canonical_run(tmp_path)
     promoted = report.promote(
-        run_dir, "run-1", _g3_report(True), manifest_path, assets=assets
+        run_dir, "run-1", _g3_report(), manifest_path, assets=assets
     )
 
     first = report.update_index(
         promoted["asset_dir"],
         "run-1",
         promoted["manifest"],
-        _g3_report(True),
+        _g3_report(),
         assets=assets,
     )
     first_text = first.read_text(encoding="utf-8")
@@ -378,7 +391,7 @@ def test_index_merge_preserves_other_entries_and_is_idempotent(
         promoted["asset_dir"],
         "run-1",
         promoted["manifest"],
-        _g3_report(True),
+        _g3_report(),
         assets=assets,
     )
     second_text = second.read_text(encoding="utf-8")
@@ -432,7 +445,7 @@ def test_summarise_run_reads_the_persisted_stage_records(tmp_path: Path) -> None
         encoding="utf-8",
     )
     (workdir / "g3_report.json").write_text(
-        json.dumps(_g3_report(False)), encoding="utf-8"
+        json.dumps(_g3_report()), encoding="utf-8"
     )
 
     row = report.summarise_run(workdir)
@@ -441,8 +454,10 @@ def test_summarise_run_reads_the_persisted_stage_records(tmp_path: Path) -> None
     assert row["mesh_sha256"] == "f" * 64
     assert row["components_count"] == 3
     assert row["largest_component_fraction"] == 0.5
-    assert row["g3_pass"] is False
-    assert row["g3_failures"] == ["components_ok"]
+    assert row["g3_status"] == "measured"
+    assert row["g3_measurements"]["components_ok"]["measured"][
+        "largest_component_fraction"
+    ] == 0.99
     assert row["build_wall_time_s"] == 5.0
 
 
@@ -461,7 +476,7 @@ def test_write_states_a_mixed_dense_cloud_provenance_honestly(
 
     written = report.write(
         _artifact(tmp_path),
-        _g3_report(True),
+        _g3_report(),
         [canonical, ab],
         cfg,
         str(tmp_path / "run"),

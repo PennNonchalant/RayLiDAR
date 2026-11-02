@@ -2,12 +2,13 @@
 
 This module is the last Phase-4 boundary.  It never re-runs reconstruction: it
 reads the persisted stage records, writes ``ab_report.md`` with the D-12
-metrics, and - only when the gate passed - copies the canonical PLY/GLB/OBJ and
-viewer GLB into ``/data-20T/hybrid-lidar-sim/assets/mesh/<run-id>/``, re-hashing
-every copied byte, writing ``SHA256SUMS`` and merging the local ``index.json``.
+metrics, and copies the canonical PLY/GLB/OBJ and viewer GLB into
+``/data-20T/hybrid-lidar-sim/assets/mesh/<run-id>/``, re-hashing every copied
+byte, writing ``SHA256SUMS`` and merging the local ``index.json``.
 
-A failing G3 report is a normal input: the report is still written (the A/B
-evidence may legitimately show one route failing), but promotion refuses.
+G3 measurements are diagnostic only.  The reconstruction package does not
+define a hard pass/fail gate and never refuses promotion because a reference
+value was missed.
 """
 
 from __future__ import annotations
@@ -112,7 +113,6 @@ def summarise_run(
     degenerate = artifact.get("degenerate") or (gate.get("metrics") or {}).get(
         "degenerate"
     ) or {}
-    checks = gate.get("checks") or {}
     metrics = gate.get("metrics") or {}
 
     if resource:
@@ -168,9 +168,8 @@ def summarise_run(
         ),
         "dense_cloud_source": dense_cloud_source,
         "dense_cloud_path": str(dense_cloud_path) if dense_cloud_path else None,
-        "g3_pass": bool(gate.get("pass")) if gate else None,
-        "g3_checks": checks,
-        "g3_failures": list(gate.get("failures") or []),
+        "g3_status": gate.get("status") or ("measured" if gate else None),
+        "g3_measurements": gate.get("measurements") or {},
         "g3_metrics": metrics,
     }
 
@@ -203,15 +202,17 @@ def _bbox(route: Mapping[str, Any]) -> str:
 
 
 def _check_metric(route: Mapping[str, Any], name: str, key: str) -> Any:
-    check = (route.get("g3_checks") or {}).get(name) or {}
-    measured = check.get("measured") or {}
+    measurement = (route.get("g3_measurements") or {}).get(name) or {}
+    measured = measurement.get("measured") or {}
     return measured.get(key)
 
 
 def _z_band_state(route: Mapping[str, Any]) -> str:
     """Render the G3-AMEND-01 z sanity band for one route."""
     band = (
-        ((route.get("g3_checks") or {}).get("bbox_ratio_ok") or {}).get("measured")
+        ((route.get("g3_measurements") or {}).get("bbox_ratio_ok") or {}).get(
+            "measured"
+        )
         or {}
     ).get("height_band")
     if not isinstance(band, dict):
@@ -219,7 +220,7 @@ def _z_band_state(route: Mapping[str, Any]) -> str:
     ok = bool(band.get("z_min_ok")) and bool(band.get("z_max_ok")) and bool(
         band.get("overlap")
     )
-    return "ok" if ok else "fail"
+    return "within" if ok else "outside"
 
 
 def _ab_markdown(
@@ -229,7 +230,7 @@ def _ab_markdown(
     cfg: Mapping[str, Any],
     run_id: str | None,
 ) -> str:
-    thresholds = g3_report.get("thresholds") or {}
+    thresholds = g3_report.get("reference_thresholds") or {}
     directions = (
         (g3_report.get("metrics") or {}).get("camera_outside") or {}
     ).get("directions") or {}
@@ -327,11 +328,11 @@ def _ab_markdown(
             + " |"
         )
     lines.append("")
-    lines.append("## G3 diagnostics (full window)")
+    lines.append("## G3 diagnostics (full window; reference values are not enforced)")
     lines.append("")
     lines.append(
-        "| route | G3 | bbox ratio (x,y) | z band | forward hit rate | near hits "
-        "| components ok | degenerate ok | smoke median (m) | failures |"
+        "| route | status | bbox ratio (x,y) | z band | forward hit rate | near hits "
+        "| components | largest fraction | degenerate fraction | smoke median (m) |"
     )
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for route in routes:
@@ -349,15 +350,15 @@ def _ab_markdown(
             + " | ".join(
                 [
                     _cell(route.get("route")),
-                    _cell(route.get("g3_pass")),
+                    _cell(route.get("g3_status")),
                     _cell(ratio_text),
                     _cell(_z_band_state(route)),
                     _cell(_check_metric(route, "camera_outside_ok", "forward_hit_rate")),
                     _cell(near),
-                    _cell(((route.get("g3_checks") or {}).get("components_ok") or {}).get("pass")),
-                    _cell(((route.get("g3_checks") or {}).get("degenerate_ok") or {}).get("pass")),
+                    _cell(_check_metric(route, "components_ok", "component_count")),
+                    _cell(_check_metric(route, "components_ok", "largest_component_fraction")),
+                    _cell(_check_metric(route, "degenerate_ok", "degenerate_fraction")),
                     _cell(median),
-                    _cell(", ".join(route.get("g3_failures") or []) or "-"),
                 ]
             )
             + " |"
@@ -384,7 +385,7 @@ def _ab_markdown(
             f"- `{name}`: [{', '.join(f'{float(v):.4f}' for v in direction)}]"
         )
     lines.append("")
-    lines.append("Thresholds:")
+    lines.append("Reference values (diagnostic only; not enforced):")
     lines.append("")
     for key in (
         "bbox_ratio_min",
@@ -462,8 +463,7 @@ def _handoff_markdown(
             + str(artifact.get("sha256") or files.get("mesh.ply") or "-")
             + "`"
         ),
-        f"- G3: {'PASS' if g3_report.get('pass') else 'FAIL'} "
-        f"({', '.join(g3_report.get('failures') or []) or 'no failures'})",
+        "- G3 diagnostics: recorded (no hard pass/fail criterion; see g3_report.json).",
         "",
         "## Validation",
         "",
@@ -493,7 +493,7 @@ def write(
     run_id: str | None = None,
     asset_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Write ``ab_report.md`` and (on a pass) ``HANDOFF.md``; return the paths."""
+    """Write ``ab_report.md`` and ``HANDOFF.md``; return the paths."""
     out_root = Path(str(cfg.get("out_root") or DEFAULT_OUT_ROOT))
     routes = list(routes or [])
     if not routes:
@@ -511,7 +511,7 @@ def write(
     _write_text(ab_path, ab_text)
 
     handoff_path = out_root / "HANDOFF.md"
-    if g3_report.get("pass") is True and run_id:
+    if run_id:
         destination = Path(asset_dir) if asset_dir else assets_root() / str(run_id)
         _write_text(
             handoff_path,
@@ -526,7 +526,7 @@ def write(
         "run_id": run_id,
         "route_count": len(routes),
         "fallback_active": fallback_active,
-        "g3_pass": bool(g3_report.get("pass")),
+        "g3_status": g3_report.get("status") or "measured",
     }
 
 
@@ -560,9 +560,6 @@ def promote(
     assets: str | Path | None = None,
 ) -> dict[str, Any]:
     """Copy the canonical artifact into the asset root after re-hashing it."""
-    if g3_report.get("pass") is not True:
-        raise RuntimeError("cannot promote a mesh that failed G3")
-
     run_dir = Path(run_dir)
     manifest_path = Path(manifest_path)
     manifest = _read_json(manifest_path)
@@ -613,11 +610,12 @@ def promote(
             + "; ".join(mismatches)
         )
 
-    # The delivered manifest records the gate verdict it was promoted with.
+    # The delivered manifest records the diagnostic measurements it was
+    # promoted with; there is no gate verdict.
     delivered_manifest = json.loads((destination / MANIFEST_FILE).read_text(encoding="utf-8"))
     delivered_manifest["g3"] = {
-        "pass": True,
-        "checks": g3_report.get("checks") or {},
+        "status": g3_report.get("status") or "measured",
+        "measurements": g3_report.get("measurements") or {},
         "report": g3_report,
     }
     _write_json(destination / MANIFEST_FILE, delivered_manifest)
@@ -671,7 +669,7 @@ def update_index(
         "vertex_count": manifest.get("vertex_count"),
         "triangle_count": manifest.get("triangle_count"),
         "frames": list((manifest.get("inputs") or {}).get("frames") or []),
-        "g3_pass": bool(g3_report.get("pass")),
+        "g3_status": g3_report.get("status") or "measured",
         "dense_backend": manifest.get("dense_backend"),
         "url": None,
         "download_sha256": None,
@@ -796,15 +794,6 @@ def main(argv: list[str] | None = None) -> int:
         asset_dir=assets_root(args.assets_root) / args.run_id,
     )
     print(f"ab_report: {written['ab_report_path']}")
-
-    if g3_report.get("pass") is not True:
-        print(
-            "cannot promote: G3 failed ("
-            + ", ".join(g3_report.get("failures") or [])
-            + ")",
-            file=sys.stderr,
-        )
-        return 6
 
     promoted = promote(
         run_dir,

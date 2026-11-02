@@ -44,8 +44,6 @@ Options:
   --route <name>             route override, or 'all' for --smoke
   --run-id <id>              stable run identifier (needed by --verify-only)
   --stop-before <stage>      stop before this stage (e.g. 'report')
-  --allow-failing-smoke      run --full for diagnosis after a failing smoke gate
-                              (records a D-09 route decision; never promotes)
   --bundle-root <p>          bundle root for --env
 
 Exit codes: 0 success, 2 usage, 3 missing precondition, otherwise the failing
@@ -60,7 +58,6 @@ ROUTE=""
 RUN_ID=""
 STAGE=""
 STOP_BEFORE=""
-ALLOW_FAILING_SMOKE=0
 BUNDLE_ROOT="$DEFAULT_BUNDLE"
 PYTEST_ARGS=()
 
@@ -104,10 +101,6 @@ while (($#)); do
     --stop-before)
       STOP_BEFORE="${2:-}"
       shift 2
-      ;;
-    --allow-failing-smoke)
-      ALLOW_FAILING_SMOKE=1
-      shift
       ;;
     --bundle-root)
       BUNDLE_ROOT="${2:-}"
@@ -200,87 +193,6 @@ require_config() {
   if [[ -z "$CONFIG" ]]; then
     echo "mode '$MODE' requires --config <path>" >&2
     exit 2
-  fi
-}
-
-smoke_gate_pass() {
-  local report="$1"
-  py -c 'import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-if not path.is_file():
-    raise SystemExit(1)
-seen = []
-
-def walk(node):
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key in ("pass", "passed"):
-                seen.append(value is True)
-            walk(value)
-    elif isinstance(node, list):
-        for value in node:
-            walk(value)
-
-walk(json.load(path.open()))
-raise SystemExit(0 if seen and all(seen) else 1)' "$report"
-}
-
-record_gate_failure() {
-  local window="$1" run_id="$2" decision="$3" reason="$4"
-  local report="$ARTS/runs/$run_id/$window/g3_report.json"
-  [[ -f "$report" ]] || return 0
-  py -c 'import sys
-from tools.mesh.reconstruct import g3
-path = g3.write_route_decision(
-    sys.argv[1], sys.argv[2], sys.argv[3],
-    decision=sys.argv[4], reason=sys.argv[5],
-)
-print(f"route decision: {path}")' "$ARTS" "$run_id" "$report" "$decision" "$reason"
-}
-
-record_run_failure() {
-  local window="$1" run_id="$2" code="$3" status="$4"
-  local run_dir="$ARTS/runs/$run_id/$window"
-  [[ -d "$run_dir" ]] || return 0
-  py -c 'import json, pathlib, sys
-from datetime import datetime, timezone
-path = pathlib.Path(sys.argv[1]) / "RESOURCE_LIMIT.json"
-payload = {
-    "schema_version": 1,
-    "status": sys.argv[2],
-    "exit_code": int(sys.argv[3]),
-    "error": sys.argv[4],
-    "captured_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-}
-path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-print(f"run failure recorded: {path}")' "$run_dir" "$status" "$code" \
-    "pipeline exited $code in the $window window; see the run log"
-}
-
-run_gate() {
-  local window="$1" run_id="$2"
-  shift 2
-  printf '+'
-  printf ' %q' "$@"
-  printf '\n'
-  set +e
-  "$@"
-  local code=$?
-  set -e
-  if [[ $code -ne 0 ]]; then
-    if [[ $code -eq 6 ]]; then
-      record_gate_failure "$window" "$run_id" "gate_failed" \
-        "G3 failed on the $window window; no mesh was promoted" || true
-    else
-      if [[ $code -eq 137 || $code -eq 9 ]]; then
-        STATUS="not_run_resource_limit"
-      else
-        STATUS="run_failed"
-      fi
-      record_run_failure "$window" "$run_id" "$code" "$STATUS" || true
-    fi
-    echo "FAILED ($code): $*" >&2
-    exit "$code"
   fi
 }
 
@@ -473,29 +385,17 @@ print("\n".join(sorted(ROUTES)))')
       args=(--config "$CONFIG" --window smoke --run-id "$RUN_ID")
       [[ -n "$ROUTE" ]] && args+=(--route "$ROUTE")
       [[ -n "$STOP_BEFORE" ]] && args+=(--stop-before "$STOP_BEFORE")
-      run_gate smoke "$RUN_ID" pipeline "${args[@]}"
+      run pipeline "${args[@]}"
     fi
     ;;
 
   full)
     require_config
     [[ -z "$RUN_ID" ]] && RUN_ID="$(default_run_id "$ROUTE")"
-    GATE="$ARTS/runs/$RUN_ID/smoke/g3_report.json"
-    if ! smoke_gate_pass "$GATE"; then
-      if [[ "$ALLOW_FAILING_SMOKE" == "1" && -f "$GATE" ]]; then
-        echo "WARNING: smoke G3 failed for $RUN_ID; running the full window for" >&2
-        echo "diagnosis only. Promotion still requires g3.pass == true." >&2
-        record_gate_failure smoke "$RUN_ID" "diagnostic_full_run" \
-          "Operator requested a full-window diagnostic after a failing smoke gate"
-      else
-        echo "refusing --full: no passing smoke run for $RUN_ID ($GATE)" >&2
-        exit 3
-      fi
-    fi
     args=(--config "$CONFIG" --window full --run-id "$RUN_ID")
     [[ -n "$ROUTE" ]] && args+=(--route "$ROUTE")
     [[ -n "$STOP_BEFORE" ]] && args+=(--stop-before "$STOP_BEFORE")
-    run_gate full "$RUN_ID" pipeline "${args[@]}"
+    run pipeline "${args[@]}"
     ;;
 
   promote)

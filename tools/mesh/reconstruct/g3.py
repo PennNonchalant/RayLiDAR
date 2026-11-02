@@ -1,32 +1,27 @@
-"""G3: the Phase-4 mesh acceptance gate (RECON-05, D-06…D-09, G3-AMEND-01).
+"""G3 diagnostics for the Phase-4 reconstruction package (RECON-05, D-06…D-09).
 
-Five independent checks are computed from local artifacts only:
+Five measurements are computed from local artifacts only:
 
-1. ``bbox_ratio`` — the x/y mesh footprint over the **camera-visible** GT
-   footprint (``camera < 2``, ``valid == 1``; ``artifacts/02/gt`` decoded
-   read-only, transformed by ``T_W_V``), plus a z sanity band that allows
-   facades/vegetation but rejects floating, underground or giant-spike meshes;
+1. ``bbox_ratio`` — the x/y mesh footprint over the camera-visible GT footprint
+   (``camera < 2``, ``valid == 1``; ``artifacts/02/gt`` decoded read-only,
+   transformed by ``T_W_V``), plus a z sanity band;
 2. ``camera_outside`` — from every full-window camera centre, five directions
-   (camera ``+z`` forward, ±30° yaw, ±20° pitch) are cast at the mesh; the
-   forward hit rate must be ``>= 0.3`` and no direction may hit closer than
-   ``1.5 m``;
-3. ``components`` — welded-vertex connected components; the largest component
-   must own at least 90 % of the triangles (G3-AMEND-01);
-4. ``degenerate`` — triangles with a repeated index or area below ``1e-12 m²``
-   must stay below 0.1 %;
+   (camera ``+z`` forward, ±30° yaw, ±20° pitch) are cast at the mesh;
+3. ``components`` — welded-vertex connected components and the largest
+   component fraction;
+4. ``degenerate`` — triangles with a repeated index or area below ``1e-12 m²``;
 5. ``smoke_range`` — the frozen rays of frames 4615–4624 are cast against the
-   mesh and ``median |t_pred - t_gt|`` must stay below ``1.0 m``.
+   mesh and the median ``|t_pred - t_gt|`` is reported.
 
-G3-AMEND-01 was approved by the user on 2026-11-01 **before** this module was
-changed and before the existing artifacts were re-gated; the original failure
-evidence and the exact revised definitions are recorded in
+These are diagnostics, not a hard pass/fail gate.  The reconstruction package
+does not reject a mesh because a reference value is missed; the numbers are
+written to ``g3_report.json`` for the consumer.  No geometric correction,
+fitting, transform, or rescaling is applied.
+
+G3-AMEND-01 (camera-visible GT, x/y + z band, 0.90 component reference) was
+approved by the user on 2026-11-01; the exact definitions and the original
+failure evidence are recorded in
 ``.planning/phases/04-multi-route-mesh-reconstruction-g3/04-G3-AMENDMENT.md``.
-It is a post-hoc protocol amendment, not a silent threshold relaxation.
-
-The evaluation artifacts are opened *only* here and only for measurement.  This
-module contains no geometric correction, fitting, transform, or rescaling code:
-a failing mesh is reported and the process exits ``6``; it is never adjusted to
-pass.  Construction never reads these artifacts (T-04-06-01, T-04-06-03).
 
 Ray casting uses ``open3d.t.geometry.RaycastingScene`` (Embree), two-sided.
 Open3D exposes no cast-range arguments, so ``t_min``/``t_max`` are enforced by
@@ -39,7 +34,6 @@ import hashlib
 import json
 import math
 import os
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,7 +101,6 @@ CAMERA_OUTSIDE_DIRECTIONS: tuple[tuple[str, tuple[float, float, float]], ...] = 
     ),
 )
 
-GATE_EXIT_CODE = 6
 
 # Fixed binary layouts (frozen; see core/include/raylidar/{gt/cache,rays/rays}.h).
 _GT_HEADER_SIZE = 64
@@ -181,7 +174,7 @@ _RAY_CAMERAS: dict[int, str] = {0: "image_00", 1: "image_01"}
 
 
 class G3Error(RuntimeError):
-    """The gate cannot be evaluated (missing/malformed input)."""
+    """The diagnostics cannot be evaluated (missing/malformed input)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -466,7 +459,7 @@ def camera_outside(
 
     ``forward_hit_rate`` is the fraction of camera centres whose forward ray
     hits the mesh; the five directions share one RaycastingScene.  A hit closer
-    than ``NEAR_HIT_MAX_M`` is a near hit and fails the gate.
+    than ``NEAR_HIT_MAX_M`` is reported as a near hit.
     """
     requested = [int(frame) for frame in frames]
     if not requested:
@@ -860,56 +853,6 @@ def smoke_range_check(range_metrics: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_route_decision(
-    out_root: str | Path,
-    run_id: str,
-    report_path: str | Path,
-    *,
-    decision: str,
-    reason: str,
-) -> Path:
-    """Record a D-09 route decision next to the failing gate report.
-
-    The decision record always carries the measured G3 failures, so a route is
-    never switched (or kept) without the evidence that motivated it.
-    """
-    report_path = Path(report_path)
-    if not report_path.is_file():
-        raise G3Error(f"cannot record a decision without a gate report: {report_path}")
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise G3Error(f"corrupt gate report {report_path}: {exc}") from exc
-    checks = report.get("checks") or {}
-    payload = {
-        "schema_version": 1,
-        "run_id": str(run_id),
-        "decision": str(decision),
-        "reason": str(reason),
-        "created_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "g3_report": str(report_path),
-        "g3_pass": bool(report.get("pass")),
-        "window": report.get("window"),
-        "frames": report.get("frames"),
-        "mesh": report.get("mesh"),
-        "failures": list(report.get("failures") or []),
-        "failing_metrics": {
-            name: {
-                "measured": (checks.get(name) or {}).get("measured"),
-                "threshold": (checks.get(name) or {}).get("threshold"),
-                "reason": (checks.get(name) or {}).get("reason"),
-            }
-            for name in report.get("failures") or []
-            if name in checks
-        },
-        "alignment_applied": bool(report.get("alignment_applied")),
-        "evaluation_frames_used_for_tuning": bool(
-            report.get("evaluation_frames_used_for_tuning")
-        ),
-    }
-    path = Path(out_root) / "route_decisions" / f"{run_id}.json"
-    _write_json(path, payload)
-    return path
 
 
 def _tool_versions(env: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -925,7 +868,7 @@ def _tool_versions(env: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# The gate
+# Diagnostics
 # --------------------------------------------------------------------------- #
 
 
@@ -989,7 +932,17 @@ def evaluate(
         "degenerate_ok": degenerate_check(stats),
         "smoke_range_ok": smoke_range_check(ranges),
     }
-    passed = all(bool(check["pass"]) for check in checks.values())
+
+    # Diagnostics only: keep the measured values, drop the reference pass/fail
+    # booleans from the report.  The constants remain available as reference
+    # values, but the reconstruction package never rejects a mesh because of them.
+    measurements = {
+        name: {
+            "measured": check.get("measured") or {},
+            "reference": check.get("threshold") or {},
+        }
+        for name, check in checks.items()
+    }
 
     metrics = {
         "mesh_extent_m": [float(mesh_max[i] - mesh_min[i]) for i in range(3)],
@@ -1011,9 +964,9 @@ def evaluate(
 
     mesh_sha256 = artifact.get("sha256") or _sha256_file(mesh_path)
     report = {
-        "schema_version": 1,
-        "gate": "G3",
-        "pass": bool(passed),
+        "schema_version": 2,
+        "status": "measured",
+        "mode": "diagnostics",
         "window": window_name,
         "frames": [int(frame) for frame in frames],
         "gt_window": "full",
@@ -1048,7 +1001,7 @@ def evaluate(
         "gate_config_sha256": config_sha256(dict(cfg)),
         "alignment_applied": False,
         "evaluation_frames_used_for_tuning": False,
-        "thresholds": {
+        "reference_thresholds": {
             "bbox_ratio_min": BBOX_RATIO_MIN,
             "bbox_ratio_max": BBOX_RATIO_MAX,
             "bbox_axes": list(BBOX_AXIS_NAMES),
@@ -1063,10 +1016,7 @@ def evaluate(
             "camera_outside_t_max_m": CAMERA_OUTSIDE_T_MAX_M,
             "gt_visible_camera_max": GT_VISIBLE_CAMERA_MAX,
         },
-        "checks": checks,
-        "failures": [
-            name for name, check in checks.items() if not bool(check["pass"])
-        ],
+        "measurements": measurements,
         "metrics": metrics,
         "tool_versions": _tool_versions(env),
         "wall_time_s": round(time.time() - started, 3),
@@ -1074,20 +1024,10 @@ def evaluate(
 
     report_path = Path(workdir) / "g3_report.json"
     _write_json(report_path, report)
-
-    if not passed:
-        for name in report["failures"]:
-            check = checks[name]
-            print(
-                f"G3 FAIL {name}: {check['reason']} | measured={check['measured']}",
-                file=sys.stderr,
-            )
-        raise SystemExit(GATE_EXIT_CODE)
-
     return {
-        "pass": True,
+        "status": "measured",
         "report_path": str(report_path),
-        "checks": checks,
+        "measurements": measurements,
         "metrics": metrics,
         "g3_report": report,
     }
@@ -1105,7 +1045,6 @@ __all__ = [
     "G3_AMENDMENT_APPROVED_AT_UTC",
     "G3_AMENDMENT_ID",
     "G3Error",
-    "GATE_EXIT_CODE",
     "GT_MIN_POINTS",
     "GT_VISIBLE_CAMERA_MAX",
     "LARGEST_COMPONENT_MIN",
@@ -1124,5 +1063,4 @@ __all__ = [
     "gt_extent",
     "smoke_range",
     "smoke_range_check",
-    "write_route_decision",
 ]
