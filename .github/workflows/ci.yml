@@ -68,4 +68,4 @@ jobs:
           }
 
       - name: Run CPU tests
-        run: ctest --preset windows-debug -LE gpu --output-on-failure --no-tests=error
+        run: ctest --preset windows-debug -LE gpu --output-on-failure

@@ -1,6 +1,5 @@
 Checks: >-
   -*,
-  readability-identifier-naming,
   readability-braces-around-statements,
   cppcoreguidelines-pro-type-member-init,
   bugprone-use-after-move,
@@ -49,3 +48,7 @@ CheckOptions:
   readability-identifier-naming.LocalConstantCase: camelBack
   readability-identifier-naming.ParameterCase: camelBack
   readability-identifier-naming.ParameterPackCase: camelBack
+  # Calibration/geometry code intentionally uses T/R/T_AB notation.
+  readability-identifier-naming.ParameterIgnoredRegexp: '^[A-Z][A-Za-z0-9_]*$'
+  readability-identifier-naming.LocalVariableIgnoredRegexp: '^[A-Z][A-Za-z0-9_]*$'
+  readability-identifier-naming.LocalConstantIgnoredRegexp: '^[A-Z][A-Za-z0-9_]*$'

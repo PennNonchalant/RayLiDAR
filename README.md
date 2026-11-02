@@ -18,7 +18,7 @@ RayLiDAR explores GPU-accelerated LiDAR simulation using adaptive hybrid mesh an
 
 ```text
 CMake Presets + vcpkg manifest
-  ├── C++20 sources -> raylidar.dll + CLI/viewer executables
+  ├── C++20 sources -> raylidar_core + raylidar_data_process + CLI/viewer executables
   └── Slang sources -> slangc -> SPIR-V shader assets
 ```
 
@@ -26,18 +26,21 @@ CMake coordinates dependency resolution, shader compilation, and application bui
 
 ## Architecture
 
-- **raylidar:** Shared simulation library containing GPU resources, scene and sensor data, scanning algorithms, and timing. Mesh ray queries form the initial baseline; Gaussian and hybrid paths follow.
-- **CLI:** Headless scanning, batch experiments, point-cloud export, and benchmarking.
+- **raylidar_core:** Shared contracts: IO/SHA-256, artifacts, CLI dispatch, KITTI calibration, and the frozen GT/ray binary schemas.
+- **raylidar_data_process:** Offline data pipeline: dataset acquisition/preflight, frame index, uncurl, masking, segment selection, GT cache, ray build/freeze, and G1/G2 checks.
+- **raylidar_eval:** Offline metrics harness (Phase 3); depends on `core` only.
+- **raylidar_runtime:** Main GPU runtime (Vulkan/VMA/BLAS/TLAS); member 1 and member 2 add sources here.
+- **CLI:** Headless scans, batch experiments, point-cloud export, and benchmarking.
 - **Viewer:** Interactive scene and scan inspection, sensor controls, and performance feedback. It shares simulation code and GPU results with the library.
 
 ```text
 apps/
     cli/                # Headless scans, export, and benchmarks
     viewer/             # Lightweight visualization and debugging
-include/raylidar/       # Public library API
-src/
-    vulkan/             # Device, buffers, and acceleration structures
-    simulation/         # Scene, sensor, and tracing implementation
+core/                   # Shared IO/artifacts/calibration/gt+ray schemas
+data_process/           # Offline dataset, GT, and ray pipeline
+eval/                   # Metrics harness (Phase 3)
+src/                    # Main Vulkan/GPU runtime
 shaders/                # Slang shaders and shared modules
 cmake/                  # Build helpers
 ```
@@ -66,7 +69,27 @@ cmake --build --preset windows-debug
 ctest --preset windows-debug
 ```
 
-The `raylidar` shared library and `raylidar_cli` targets produce `raylidar.dll` and `raylidar_cli.exe` together in `build/windows-debug/`. The CLI currently supports `--help` and `--version`; CTest runs the configured tests. Use `windows-release` for an optimized build. In Visual Studio, open the repository folder, select a preset and executable target, then build and run.
+The `raylidar_core` / `raylidar_data_process` shared libraries and the `raylidar_cli` target produce the DLLs and `raylidar_cli.exe` together in `build/windows-debug/`. The CLI currently supports `--help` and `--version`; CTest runs the configured tests. Use `windows-release` for an optimized build. In Visual Studio, open the repository folder, select a preset and executable target, then build and run.
+
+## Mesh Reconstruction Package
+
+The Phase 4 reconstruction package lives in `tools/mesh/reconstruct/`. It
+provides a canonical COLMAP→OpenMVS route, an Open3D alpha-shape A/B route,
+W-frame PLY/GLB/OBJ export, cleanup/statistics, and diagnostic mesh
+measurements. `g3_report.json` is informational only; it has no hard pass/fail
+fields and does not block promotion.
+
+```bash
+bash scripts/phase4.sh --env
+bash scripts/phase4.sh --test
+bash scripts/phase4.sh --smoke --route colmap_openmvs \
+  --config tools/mesh/reconstruct/configs/canonical_colmap_openmvs.yaml
+```
+
+The accompanying data bundle (mesh PLY, 60 rectified `image_00` frames, camera
+parameters, and 1,765,175 frozen camera-origin rays) is shared through a
+team-restricted Google Drive link. See `docs/mesh-reconstruction.md` for the
+package layout, commands, data-bundle contents, and license note.
 
 ## Run Checks
 

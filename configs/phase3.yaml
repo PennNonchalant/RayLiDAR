@@ -1,0 +1,54 @@
+# Phase 3 frozen configuration.
+#
+# Single source of truth for the evaluation protocol, the deterministic
+# placeholder scene, and the synthetic predictor. Values are frozen by
+# .planning/phases/03-evaluation-harness-metrics-contract/03-CONTEXT.md
+# (D-06, D-07, D-13..D-16, D-18, D-20) and docs/protocol.md. No later plan may
+# change a protocol value without a new hash and a new run ID.
+schema_version: 1
+phase: 3
+run_id: p3-placeholder-v1
+artifacts:
+  phase_dir: /data-20T/hybrid-lidar-sim/artifacts/03
+protocol:
+  protocol_version: 1
+  t_min_m: 1.0e-4
+  r_min_m: 1.5
+  t_max_m: 60.0
+  taus_m: [0.05, 0.20, 0.50]
+  primary_tau_m: 0.20
+  primary_buckets: [[0.0, 20.0], [20.0, 40.0], [40.0, 50.0]]
+  secondary_bucket: [50.0, 60.0]
+  bucket_edge_rule: closed_on_right_for_40_50_and_secondary_50_60
+  percentile_rule: nearest_rank
+  macro_std: sample_n_minus_1
+  prf_primary: nearest_neighbour_within_tau
+  prf_secondary: one_to_one_greedy
+  greedy_candidate_cap: 4096
+  cd_convention: symmetric_half_average
+  null_policy: json_null_empty_csv
+  protocol_doc: docs/protocol.md
+placeholder:
+  generator: procedural_street_v1
+  seed: 20261101
+  ground_length_m: 80.0
+  ground_width_m: 20.0
+  box_count: 18
+  thin_box_count: 8
+  cameras:
+    - id: 0
+      origin_m: [0.0, 0.0, 1.6]
+    - id: 1
+      origin_m: [0.54, 0.0, 1.6]
+  ray_grid:
+    width: 96
+    height: 48
+    hfov_deg: 90.0
+    vfov_deg: 30.0
+  frames: 4
+  frame_stride_m: 0.5
+  predictor:
+    name: linear_range_bias_scale_v1
+    range_bias_m: 0.02
+    range_scale: 0.01
+    miss_every_n: 97
