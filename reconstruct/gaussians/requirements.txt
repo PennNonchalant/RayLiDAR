@@ -1,0 +1,14 @@
+# Phase 5 official 3DGS / 2DGS runtime pins.
+# Installed into /data-20T/hybrid-lidar-sim/envs/gaussian-venv (never the repo).
+torch==2.4.1+cu121
+torchvision==0.19.1+cu121
+plyfile==1.0.3
+tqdm==4.66.5
+numpy==1.26.4
+scipy==1.13.1
+scikit-image==0.24.0
+opencv-python-headless==4.10.0.84
+tensorboard==2.17.1
+matplotlib==3.9.2
+pytest==8.3.3
+PyYAML==6.0.2
