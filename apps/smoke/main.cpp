@@ -1,5 +1,5 @@
-#include "rt/AccelerationStructure.h"
 #include "rt/ASBuilder.h"
+#include "rt/AccelerationStructure.h"
 
 #include "vulkan/Buffer.h"
 #include "vulkan/CommandContext.h"
@@ -147,8 +147,8 @@ int main(int argc, char *argv[])
                     .setFlags(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable)
                     .setAccelerationStructureReference(blas.DeviceAddress());
 
-                raylidar::rt::AccelerationStructure tlas(builder.RecordTlas(commandBuffer,
-                    std::span<const vk::AccelerationStructureInstanceKHR>(&instance, 1)));
+                raylidar::rt::AccelerationStructure tlas(builder.RecordTlas(
+                    commandBuffer, std::span<const vk::AccelerationStructureInstanceKHR>(&instance, 1)));
 
                 buildCommands.End();
                 buildCommands.SubmitAndWait();

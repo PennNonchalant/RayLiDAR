@@ -153,8 +153,7 @@ AccelerationStructure ASBuilder::RecordBuild(const vk::raii::CommandBuffer &comm
 
     const vk::DeviceAddress scratchAddress = scratchBuffer.DeviceAddress();
 
-    buildInfo.setDstAccelerationStructure(accelerationStructure.Handle())
-        .setScratchData(scratchAddress);
+    buildInfo.setDstAccelerationStructure(accelerationStructure.Handle()).setScratchData(scratchAddress);
 
     vk::AccelerationStructureBuildRangeInfoKHR rangeInfo;
     rangeInfo.setPrimitiveCount(primitiveCount);
