@@ -1,34 +1,18 @@
-"""Standalone mesh reconstruction package.
+"""Self-contained KITTI-360 reconstruction and evaluation pipeline.
 
-The package owns the whole mesh pipeline behind one import boundary:
+Subpackages:
 
-- :mod:`reconstruct.contracts` — window/artifact/route data contracts,
-- :mod:`reconstruct.config` — strict YAML loading + canonical config hash,
-- :mod:`reconstruct.colmap_model` — known-pose COLMAP preprocessing,
-- :mod:`reconstruct.routes` — lazy reconstruction-route resolution,
-- :mod:`reconstruct.ingest` — canonical cleanup, export, and manifest,
-- :mod:`reconstruct.g3` — diagnostic measurements,
-- :mod:`reconstruct.report` — A/B report and asset promotion.
+- :mod:`reconstruct.data_preprocess` — KITTI-360 → frozen artifacts and bundle,
+- :mod:`reconstruct.mesh` — multi-route mesh reconstruction,
+- :mod:`reconstruct.gaussians` — 3DGS vs 2DGS reconstruction and report,
+- :mod:`reconstruct.eval` — Phase-3 metrics,
+- :mod:`reconstruct.pipeline` — full-flow helper scripts.
 
-Nothing here imports the C++ tree, the evaluation harness, or any other
-repository module. Heavy dependencies (``open3d``, ``trimesh``) are imported
-inside the stage that needs them, so configuration and dispatch stay cheap.
+The package is independent of the C++ Vulkan runtime in ``src/``. Heavy optional
+dependencies (torch and the OpenMVS helpers) are imported lazily by the stage that
+needs them.
 """
 
-__all__ = [
-    "cameras",
-    "cleanup",
-    "colmap_model",
-    "config",
-    "contracts",
-    "dense",
-    "env",
-    "g3",
-    "ingest",
-    "manifest",
-    "meshio",
-    "pipeline",
-    "report",
-    "routes",
-    "validate",
-]
+from __future__ import annotations
+
+__all__ = ["data_preprocess", "eval", "gaussians", "mesh", "pipeline"]
