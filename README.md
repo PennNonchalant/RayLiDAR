@@ -36,8 +36,9 @@ apps/
     viewer/             # Lightweight visualization and debugging
 include/raylidar/       # Public library API
 src/
-    vulkan/             # Device, buffers, and acceleration structures
-    simulation/         # Scene, sensor, and tracing implementation
+    vulkan/             # Device, buffers, compute pipelines, and synchronization
+    rt/                 # Acceleration structures, mesh scenes, and ray query tracing
+    simulation/         # Scene, sensors, scan generation, and return modeling
 shaders/                # Slang shaders and shared modules
 cmake/                  # Build helpers
 ```
