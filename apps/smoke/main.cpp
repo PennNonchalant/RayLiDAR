@@ -24,7 +24,7 @@
 
 namespace
 {
-void RunRayQuerySmoke(const raylidar::vulkan::VulkanContext& context, const std::filesystem::path& shaderPath)
+void RunRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const std::filesystem::path &shaderPath)
 {
     const std::array<std::array<float, 3>, 3> vertices = {{
         {-1.0f, -1.0f, 0.0f},
@@ -127,8 +127,7 @@ void RunRayQuerySmoke(const raylidar::vulkan::VulkanContext& context, const std:
     std::cout << "Ray query I/O smoke passed.\n";
 }
 
-
-void RunComputeSmoke(const raylidar::vulkan::VulkanContext& context, const std::filesystem::path& shaderPath)
+void RunComputeSmoke(const raylidar::vulkan::VulkanContext &context, const std::filesystem::path &shaderPath)
 {
     const raylidar::vulkan::Shader shader(context, shaderPath);
 

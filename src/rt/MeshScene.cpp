@@ -70,12 +70,9 @@ MeshScene::MeshScene(const vulkan::VulkanContext &context, const MeshSceneDescri
 
         vulkan::Buffer indexBuffer(context, geometryDescription);
 
-        m_meshes.push_back(MeshResources{
-            std::move(vertexBuffer),
-            std::move(indexBuffer),
-            static_cast<std::uint32_t>(mesh.Positions.size()),
-            static_cast<std::uint32_t>(mesh.Indices.size())
-        });
+        m_meshes.push_back(MeshResources{std::move(vertexBuffer), std::move(indexBuffer),
+                                         static_cast<std::uint32_t>(mesh.Positions.size()),
+                                         static_cast<std::uint32_t>(mesh.Indices.size())});
 
         vulkan::BufferDescription uploadDescription;
         uploadDescription.Size = static_cast<vk::DeviceSize>(vertexBytes.size());
@@ -115,7 +112,8 @@ void MeshScene::RecordBuild(const vk::raii::CommandBuffer &commandBuffer, ASBuil
     }
 
     vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
-                        vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eShaderRead);
+                                vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+                                vk::AccessFlagBits2::eShaderRead);
 
     for (std::size_t meshIndex = 0; meshIndex < m_meshes.size(); ++meshIndex)
     {
@@ -123,9 +121,9 @@ void MeshScene::RecordBuild(const vk::raii::CommandBuffer &commandBuffer, ASBuil
     }
 
     vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-                        vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
-                        vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-                        vk::AccessFlagBits2::eAccelerationStructureReadKHR);
+                                vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+                                vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+                                vk::AccessFlagBits2::eAccelerationStructureReadKHR);
 
     for (std::size_t instanceIndex = 0; instanceIndex < m_instances.size(); ++instanceIndex)
     {
@@ -143,8 +141,9 @@ void MeshScene::RecordBuild(const vk::raii::CommandBuffer &commandBuffer, ASBuil
     m_tlas.emplace(builder.RecordTlas(commandBuffer, instances));
 
     vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-                        vk::AccessFlagBits2::eAccelerationStructureWriteKHR, vk::PipelineStageFlagBits2::eComputeShader,
-                        vk::AccessFlagBits2::eAccelerationStructureReadKHR);
+                                vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+                                vk::PipelineStageFlagBits2::eComputeShader,
+                                vk::AccessFlagBits2::eAccelerationStructureReadKHR);
 }
 
 void MeshScene::ReleaseUploadResources()
