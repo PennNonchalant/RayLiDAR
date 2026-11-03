@@ -105,3 +105,24 @@ git ls-files -- '*.cpp' '*.cc' '*.cxx' | ForEach-Object {
 }
 ctest --preset windows-debug -LE gpu --output-on-failure --no-tests=error
 ```
+
+## Reconstruction Package
+
+The offline reconstruction pipeline is self-contained under `reconstruct/` and is
+independent of the C++ runtime:
+
+- `reconstruct/data_preprocess` — KITTI-360 → frozen Phase-2 artifacts and the
+  mesh/Gaussian handoff bundle (pure Python);
+- `reconstruct/mesh` — COLMAP → OpenMVS / Open3D alpha-shape → canonical mesh;
+- `reconstruct/gaussians` — 3DGS vs 2DGS training, rendering, hits, and report;
+- `reconstruct/eval` — Phase-3 range/miss/coverage, P/R/F, and Chamfer metrics;
+- `reconstruct/pipeline` — full preprocess → reconstruct → evaluate → package flow.
+
+```bash
+export PYTHONPATH="$PWD"
+python -m reconstruct.data_preprocess --help
+bash reconstruct/pipeline/run_all.sh
+```
+
+See `reconstruct/README.md` for the package layout, frozen binary formats, and
+the local (untracked) end-to-end checks under `reconstruct/test/`.
