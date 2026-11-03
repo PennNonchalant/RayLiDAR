@@ -1,4 +1,5 @@
 #include "rt/AccelerationStructure.h"
+#include "rt/ASBuilder.h"
 
 #include "vulkan/Buffer.h"
 #include "vulkan/CommandContext.h"
@@ -83,6 +84,87 @@ int main(int argc, char *argv[])
             }
 
             std::cout << "Acceleration structure resource smoke passed.\n";
+
+            {
+                const std::array<std::array<float, 3>, 3> vertices = {{
+                    {-1.0f, -1.0f, 0.0f},
+                    {1.0f, -1.0f, 0.0f},
+                    {0.0f, 1.0f, 0.0f},
+                }};
+
+                const std::array<std::uint32_t, 3> indices = {0, 1, 2};
+
+                const auto vertexBytes = std::as_bytes(std::span(vertices));
+                const auto indexBytes = std::as_bytes(std::span(indices));
+
+                raylidar::vulkan::BufferDescription geometryBufferDescription;
+                geometryBufferDescription.Size = static_cast<vk::DeviceSize>(vertexBytes.size());
+                geometryBufferDescription.Usage = vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
+                                                  vk::BufferUsageFlagBits::eShaderDeviceAddress;
+                geometryBufferDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Upload;
+                geometryBufferDescription.MinimumAlignment = 4;
+
+                raylidar::vulkan::Buffer vertexBuffer(context, geometryBufferDescription);
+                vertexBuffer.Write(vertexBytes);
+
+                geometryBufferDescription.Size = static_cast<vk::DeviceSize>(indexBytes.size());
+
+                raylidar::vulkan::Buffer indexBuffer(context, geometryBufferDescription);
+                indexBuffer.Write(indexBytes);
+
+                raylidar::rt::TriangleGeometryView geometry{vertexBuffer, indexBuffer};
+                geometry.VertexCount = static_cast<std::uint32_t>(vertices.size());
+                geometry.IndexCount = static_cast<std::uint32_t>(indices.size());
+
+                raylidar::rt::ASBuilder builder(context);
+
+                raylidar::vulkan::CommandContext buildCommands(context);
+                const auto &commandBuffer = buildCommands.Begin();
+
+                raylidar::rt::AccelerationStructure blas(builder.RecordBlas(commandBuffer, geometry));
+
+                vk::MemoryBarrier2 buildBarrier;
+                buildBarrier.setSrcStageMask(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR)
+                    .setSrcAccessMask(vk::AccessFlagBits2::eAccelerationStructureWriteKHR)
+                    .setDstStageMask(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR)
+                    .setDstAccessMask(vk::AccessFlagBits2::eAccelerationStructureReadKHR);
+
+                vk::DependencyInfo buildDependency;
+                buildDependency.setMemoryBarriers(buildBarrier);
+
+                commandBuffer.pipelineBarrier2(buildDependency);
+
+                vk::TransformMatrixKHR transform{};
+                transform.matrix[0][0] = 1.0f;
+                transform.matrix[1][1] = 1.0f;
+                transform.matrix[2][2] = 1.0f;
+
+                vk::AccelerationStructureInstanceKHR instance;
+                instance.setTransform(transform)
+                    .setInstanceCustomIndex(0)
+                    .setMask(0xFF)
+                    .setInstanceShaderBindingTableRecordOffset(0)
+                    .setFlags(vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable)
+                    .setAccelerationStructureReference(blas.DeviceAddress());
+
+                raylidar::rt::AccelerationStructure tlas(builder.RecordTlas(commandBuffer,
+                    std::span<const vk::AccelerationStructureInstanceKHR>(&instance, 1)));
+
+                buildCommands.End();
+                buildCommands.SubmitAndWait();
+
+                if (blas.Type() != vk::AccelerationStructureTypeKHR::eBottomLevel ||
+                    tlas.Type() != vk::AccelerationStructureTypeKHR::eTopLevel || blas.Size() == 0 ||
+                    tlas.Size() == 0 || blas.DeviceAddress() == 0 || tlas.DeviceAddress() == 0)
+                {
+                    throw std::runtime_error("Acceleration structure build smoke failed.");
+                }
+
+                std::cout << "BLAS storage: " << blas.Size() << " bytes\n"
+                          << "TLAS storage: " << tlas.Size() << " bytes\n";
+            }
+
+            std::cout << "Acceleration structure build smoke passed.\n";
 
             const raylidar::vulkan::Shader shader(context, argv[1]);
 
