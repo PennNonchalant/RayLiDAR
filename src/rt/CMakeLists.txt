@@ -1,6 +1,7 @@
 add_library(raylidar_rt STATIC
     AccelerationStructure.cpp
     ASBuilder.cpp
+    MeshScene.cpp
 )
 
 target_compile_features(raylidar_rt PUBLIC cxx_std_20)
