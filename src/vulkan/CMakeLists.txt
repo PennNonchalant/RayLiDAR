@@ -6,6 +6,7 @@ add_library(raylidar_vulkan STATIC
     ComputePipeline.cpp
     DescriptorBindings.cpp
     CommandContext.cpp
+    Synchronization.cpp
 )
 
 target_compile_features(raylidar_vulkan PUBLIC cxx_std_20)

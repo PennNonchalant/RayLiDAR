@@ -1,5 +1,6 @@
 #include "MeshScene.h"
 
+#include "vulkan/Synchronization.h"
 #include "vulkan/VulkanContext.h"
 
 #include <algorithm>
@@ -37,22 +38,6 @@ void ValidateDescription(const MeshSceneDescription &description)
     {
         throw std::out_of_range("Instance references a mesh outside the scene.");
     }
-}
-
-void RecordMemoryBarrier(const vk::raii::CommandBuffer &commandBuffer, vk::PipelineStageFlags2 sourceStage,
-                         vk::AccessFlags2 sourceAccess, vk::PipelineStageFlags2 destinationStage,
-                         vk::AccessFlags2 destinationAccess)
-{
-    vk::MemoryBarrier2 barrier;
-    barrier.setSrcStageMask(sourceStage)
-        .setSrcAccessMask(sourceAccess)
-        .setDstStageMask(destinationStage)
-        .setDstAccessMask(destinationAccess);
-
-    vk::DependencyInfo dependency;
-    dependency.setMemoryBarriers(barrier);
-
-    commandBuffer.pipelineBarrier2(dependency);
 }
 } // namespace
 
@@ -129,7 +114,7 @@ void MeshScene::RecordBuild(const vk::raii::CommandBuffer &commandBuffer, ASBuil
                                  vk::BufferCopy(0, 0, mesh.IndexBuffer.Size()));
     }
 
-    RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+    vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
                         vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eShaderRead);
 
     for (std::size_t meshIndex = 0; meshIndex < m_meshes.size(); ++meshIndex)
@@ -137,7 +122,7 @@ void MeshScene::RecordBuild(const vk::raii::CommandBuffer &commandBuffer, ASBuil
         m_blas.push_back(builder.RecordBlas(commandBuffer, Geometry(meshIndex)));
     }
 
-    RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+    vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
                         vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
                         vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
                         vk::AccessFlagBits2::eAccelerationStructureReadKHR);
@@ -157,7 +142,7 @@ void MeshScene::RecordBuild(const vk::raii::CommandBuffer &commandBuffer, ASBuil
 
     m_tlas.emplace(builder.RecordTlas(commandBuffer, instances));
 
-    RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+    vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
                         vk::AccessFlagBits2::eAccelerationStructureWriteKHR, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eAccelerationStructureReadKHR);
 }

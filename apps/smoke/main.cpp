@@ -1,12 +1,14 @@
 #include "rt/ASBuilder.h"
-#include "rt/AccelerationStructure.h"
 #include "rt/MeshScene.h"
+#include "rt/RayQueryTracer.h"
+#include "rt/TraceTypes.h"
 
 #include "vulkan/Buffer.h"
 #include "vulkan/CommandContext.h"
 #include "vulkan/ComputePipeline.h"
 #include "vulkan/DescriptorBindings.h"
 #include "vulkan/Shader.h"
+#include "vulkan/Synchronization.h"
 #include "vulkan/VulkanContext.h"
 
 #include <array>
@@ -14,6 +16,7 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -23,9 +26,9 @@ int main(int argc, char *argv[])
 {
     try
     {
-        if (argc != 2)
+        if (argc != 3)
         {
-            throw std::invalid_argument("Usage: raylidar_smoke <shader.spv>");
+            throw std::invalid_argument("Usage: raylidar_smoke <compute.spv> <ray-query.spv>");
         }
 
         {
@@ -47,46 +50,6 @@ int main(int argc, char *argv[])
                       << '\n';
 
             {
-                raylidar::rt::AccelerationStructureDescription blasDescription;
-                blasDescription.Type = vk::AccelerationStructureTypeKHR::eBottomLevel;
-                blasDescription.Size = 4095;
-
-                raylidar::rt::AccelerationStructure initialBlas(context, blasDescription);
-
-                const vk::AccelerationStructureKHR originalHandle = initialBlas.Handle();
-                const vk::DeviceAddress originalAddress = initialBlas.DeviceAddress();
-
-                if (!originalHandle || originalAddress == 0 || initialBlas.Type() != blasDescription.Type ||
-                    initialBlas.Size() != blasDescription.Size)
-                {
-                    throw std::runtime_error("Acceleration structure initialization failed.");
-                }
-
-                raylidar::rt::AccelerationStructure movedBlas(std::move(initialBlas));
-
-                if (movedBlas.Handle() != originalHandle || movedBlas.DeviceAddress() != originalAddress ||
-                    movedBlas.Type() != blasDescription.Type || movedBlas.Size() != blasDescription.Size)
-                {
-                    throw std::runtime_error("Acceleration structure move construction failed.");
-                }
-
-                raylidar::rt::AccelerationStructureDescription targetDescription;
-                targetDescription.Type = vk::AccelerationStructureTypeKHR::eTopLevel;
-                targetDescription.Size = 8192;
-
-                raylidar::rt::AccelerationStructure target(context, targetDescription);
-                target = std::move(movedBlas);
-
-                if (target.Handle() != originalHandle || target.DeviceAddress() != originalAddress ||
-                    target.Type() != blasDescription.Type || target.Size() != blasDescription.Size)
-                {
-                    throw std::runtime_error("Acceleration structure move assignment failed.");
-                }
-            }
-
-            std::cout << "Acceleration structure resource smoke passed.\n";
-
-            {
                 const std::array<std::array<float, 3>, 3> vertices = {{
                     {-1.0f, -1.0f, 0.0f},
                     {1.0f, -1.0f, 0.0f},
@@ -105,29 +68,89 @@ int main(int argc, char *argv[])
                 raylidar::rt::MeshScene scene(context, sceneDescription);
                 raylidar::rt::ASBuilder builder(context);
 
-                raylidar::vulkan::CommandContext buildCommands(context);
-                const auto &commandBuffer = buildCommands.Begin();
+                const raylidar::vulkan::Shader traceShader(context, argv[2]);
+                raylidar::rt::RayQueryTracer tracer(context, traceShader);
+
+                constexpr std::size_t rayCount = 65;
+                std::array<raylidar::rt::Ray, rayCount> rays{};
+
+                for (std::size_t index = 0; index < rays.size(); ++index)
+                {
+                    rays[index].Origin = {index % 2 == 0 ? 0.0f : 3.0f, 0.0f, -1.0f};
+                    rays[index].TMax = 100.0f + static_cast<float>(index);
+                }
+
+                const auto rayBytes = std::as_bytes(std::span(rays));
+                const vk::DeviceSize hitByteCount = rayCount * sizeof(raylidar::rt::Hit);
+
+                raylidar::vulkan::BufferDescription rayDescription;
+                rayDescription.Size = static_cast<vk::DeviceSize>(rayBytes.size());
+                rayDescription.Usage = vk::BufferUsageFlagBits::eStorageBuffer;
+                rayDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Upload;
+
+                raylidar::vulkan::Buffer rayBuffer(context, rayDescription);
+                rayBuffer.Write(rayBytes);
+
+                raylidar::vulkan::BufferDescription hitDescription;
+                hitDescription.Size = hitByteCount;
+                hitDescription.Usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc;
+
+                const raylidar::vulkan::Buffer hitBuffer(context, hitDescription);
+
+                raylidar::vulkan::BufferDescription readbackDescription;
+                readbackDescription.Size = hitByteCount;
+                readbackDescription.Usage = vk::BufferUsageFlagBits::eTransferDst;
+                readbackDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Readback;
+
+                const raylidar::vulkan::Buffer readbackBuffer(context, readbackDescription);
+
+                raylidar::vulkan::CommandContext traceCommands(context);
+                const auto &commandBuffer = traceCommands.Begin();
 
                 scene.RecordBuild(commandBuffer, builder);
 
-                buildCommands.End();
-                buildCommands.SubmitAndWait();
+                tracer.SetResources(scene.Tlas(), rayBuffer, hitBuffer);
+
+                raylidar::rt::TraceParameters parameters;
+                parameters.RayCount = static_cast<std::uint32_t>(rays.size());
+
+                tracer.RecordTrace(commandBuffer, parameters);
+
+                raylidar::vulkan::RecordMemoryBarrier(commandBuffer, 
+                        vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
+
+                commandBuffer.copyBuffer(hitBuffer.Handle(), readbackBuffer.Handle(),
+                                         vk::BufferCopy(0, 0, hitByteCount));
+
+                raylidar::vulkan::RecordMemoryBarrier(commandBuffer, 
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+                        vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
+
+                traceCommands.End();
+                traceCommands.SubmitAndWait();
 
                 scene.ReleaseUploadResources();
 
-                const auto &tlas = scene.Tlas();
+                std::array<raylidar::rt::Hit, rayCount> hits{};
+                readbackBuffer.Read(std::as_writable_bytes(std::span(hits)));
 
-                if (scene.MeshCount() != 1 || scene.Instances().size() != 1 ||
-                    tlas.Type() != vk::AccelerationStructureTypeKHR::eTopLevel || tlas.DeviceAddress() == 0 ||
-                    tlas.Size() == 0)
+                constexpr std::uint32_t invalidId = std::numeric_limits<std::uint32_t>::max();
+                const std::array<float, 2> zeroBarycentrics{};
+
+                for (std::size_t index = 0; index < hits.size(); ++index)
                 {
-                    throw std::runtime_error("Mesh scene build smoke failed.");
-                }
+                    const auto &hit = hits[index];
 
-                std::cout << "TLAS storage: " << tlas.Size() << " bytes\n";
+                    if (hit.T != rays[index].TMax || hit.Valid != 0 || hit.InstanceId != invalidId ||
+                        hit.PrimitiveId != invalidId || hit.Barycentrics != zeroBarycentrics)
+                    {
+                        throw std::runtime_error("Ray query I/O smoke failed at ray " + std::to_string(index) + ".");
+                    }
+                }
             }
 
-            std::cout << "Mesh scene build smoke passed.\n";
+            std::cout << "Ray query I/O smoke passed.\n";
 
             const raylidar::vulkan::Shader shader(context, argv[1]);
 
@@ -210,26 +233,12 @@ int main(int argc, char *argv[])
 
                 const auto &commandBuffer = commands.Begin();
 
-                const auto barrier =
-                    [&commandBuffer](vk::PipelineStageFlags2 sourceStage, vk::AccessFlags2 sourceAccess,
-                                     vk::PipelineStageFlags2 destinationStage, vk::AccessFlags2 destinationAccess) {
-                        vk::MemoryBarrier2 memoryBarrier;
-                        memoryBarrier.setSrcStageMask(sourceStage)
-                            .setSrcAccessMask(sourceAccess)
-                            .setDstStageMask(destinationStage)
-                            .setDstAccessMask(destinationAccess);
-
-                        vk::DependencyInfo dependencyInformation;
-                        dependencyInformation.setMemoryBarriers(memoryBarrier);
-
-                        commandBuffer.pipelineBarrier2(dependencyInformation);
-                    };
-
                 const vk::BufferCopy copyRegion(0, 0, byteCount);
 
                 commandBuffer.copyBuffer(uploadBuffer.Handle(), inputBuffer.Handle(), copyRegion);
 
-                barrier(vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+                raylidar::vulkan::RecordMemoryBarrier(commandBuffer, 
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
                         vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderRead);
 
                 commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.Handle());
@@ -237,12 +246,14 @@ int main(int argc, char *argv[])
                                                  bindings.Handles(), {});
                 commandBuffer.dispatch(static_cast<std::uint32_t>(input.size()), 1, 1);
 
-                barrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
+                raylidar::vulkan::RecordMemoryBarrier(commandBuffer, 
+                        vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderWrite,
                         vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferRead);
 
                 commandBuffer.copyBuffer(outputBuffer.Handle(), readbackBuffer.Handle(), copyRegion);
 
-                barrier(vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
+                raylidar::vulkan::RecordMemoryBarrier(commandBuffer, 
+                        vk::PipelineStageFlagBits2::eCopy, vk::AccessFlagBits2::eTransferWrite,
                         vk::PipelineStageFlagBits2::eHost, vk::AccessFlagBits2::eHostRead);
 
                 commands.End();
