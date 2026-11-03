@@ -1,18 +1,18 @@
 """Route-agnostic canonical ingest: one adapter for every reconstruction route.
 
 Routes only produce a raw mesh path.  This module is the single boundary that
-turns that path into the exported mesh bundle:
+turns that path into the canonical Phase-4 artifact (RECON-03, D-10):
 
 1. load the raw mesh and require finite float64 W-frame metre geometry,
 2. assert the metric/frame envelope **without** translating, rotating, scaling,
    or fitting anything (a failure is loud, never "repaired"),
 3. weld, drop degenerates/specks, and drop unreferenced vertices,
-4. export the full canonical PLY/GLB/OBJ plus a separate decimated viewer GLB,
-5. build and validate the manifest from the written bytes.
+4. export the full canonical PLY/GLB/OBJ plus a viewer GLB,
+5. build the manifest from the written bytes and run the Python validator.
 
 There is deliberately no code path that aligns a mesh to the camera trajectory
 or to GT.  The only evaluation-side data used here is the camera-centre AABB
-taken from the prepared bundle, and it is used solely as a rejection envelope.
+taken from the P2 bundle, and it is used solely as a rejection envelope.
 """
 
 from __future__ import annotations
@@ -36,17 +36,6 @@ from .config import config_sha256
 MESH_EXTENT_LIMIT_M = 500.0
 # The mesh must overlap the observed corridor, not drift elsewhere in W.
 CAMERA_ENVELOPE_MARGIN_M = 100.0
-DEFAULT_VIEWER_MAX_TRIANGLES = 1_000_000
-
-# Reporting metadata only: behaviour never branches on the route name.  The
-# authoritative provenance field is ``config_sha256``.
-_CONFIG_DIR = Path(__file__).resolve().parent / "configs"
-_CONFIG_PATHS = {
-    "colmap_openmvs": str(_CONFIG_DIR / "canonical_colmap_openmvs.yaml"),
-    "open3d_alpha": str(_CONFIG_DIR / "open3d_alpha.yaml"),
-    "openmvs_direct": str(_CONFIG_DIR / "openmvs_direct.yaml"),
-}
-
 
 class IngestError(RuntimeError):
     """The route mesh cannot become a canonical W-frame metre artifact."""
@@ -131,35 +120,17 @@ def _camera_centres(bundle_root: str | Path, frames: Sequence[int]) -> np.ndarra
 
 def _load_route_mesh(mesh_path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     """Load exactly one triangle mesh as float64 vertices and int64 faces."""
-    import trimesh  # imported lazily; ingest is only needed by the ingest stage
-
     path = Path(mesh_path)
     if not path.is_file():
         raise IngestError(f"route mesh is missing: {path}")
-    loaded = trimesh.load(str(path), process=False)
-    if isinstance(loaded, trimesh.Scene):
-        geometries = list(loaded.geometry.values())
-        if len(geometries) != 1:
-            raise IngestError(
-                f"route mesh must contain exactly one geometry, got {len(geometries)}"
-            )
-        loaded = geometries[0]
-    if not isinstance(loaded, trimesh.Trimesh):
-        raise IngestError(f"route mesh is not a triangle mesh: {path}")
-
-    vertices = np.ascontiguousarray(np.asarray(loaded.vertices, dtype=np.float64))
-    faces = np.asarray(loaded.faces)
-    if vertices.ndim != 2 or vertices.shape[1] != 3:
-        raise IngestError("route mesh vertices must have shape (N, 3)")
-    if faces.size == 0:
+    try:
+        vertices, faces = meshio.read_mesh(path)
+    except meshio.MeshFormatError as exc:
+        raise IngestError(str(exc)) from exc
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or vertices.shape[0] == 0:
+        raise IngestError("route mesh has no usable vertices")
+    if faces.ndim != 2 or faces.shape[1] != 3 or faces.shape[0] == 0:
         raise IngestError("route mesh has no triangles")
-    if faces.ndim != 2 or faces.shape[1] != 3:
-        raise IngestError("route mesh faces must be triangles")
-    if not np.issubdtype(faces.dtype, np.integer):
-        raise IngestError("route mesh face indices must be integers")
-    faces = np.ascontiguousarray(faces, dtype=np.int64)
-    if vertices.shape[0] == 0:
-        raise IngestError("route mesh has no vertices")
     if not np.isfinite(vertices).all():
         raise IngestError("route mesh has non-finite vertex coordinates")
     if faces.min() < 0 or faces.max() >= vertices.shape[0]:
@@ -215,16 +186,17 @@ def _assert_metre_w(vertices: np.ndarray, centres: np.ndarray) -> dict[str, Any]
 
 
 def _git_sha() -> str:
-    """Return the enclosing git revision when the package lives in a checkout."""
-    root = Path(__file__).resolve().parent
     try:
         completed = subprocess.run(
             [
                 "git",
+                # The container runs as root against a bind-mounted repo owned
+                # by the host user; without this, git refuses with "dubious
+                # ownership" and the manifest would silently lose its git SHA.
                 "-c",
-                f"safe.directory={root}",
+                f"safe.directory={validate.REPO_ROOT}",
                 "-C",
-                str(root),
+                str(validate.REPO_ROOT),
                 "rev-parse",
                 "HEAD",
             ],
@@ -283,14 +255,10 @@ def ingest(
 
     params = cfg.get("params") or {}
     cleanup_params = params.get("cleanup") or {}
-    viewer_params = params.get("viewer") or {}
     min_component_triangles = int(
         cleanup_params.get(
             "min_component_triangles", cleanup.DEFAULT_MIN_COMPONENT_TRIANGLES
         )
-    )
-    target_triangles = int(
-        viewer_params.get("max_triangles", DEFAULT_VIEWER_MAX_TRIANGLES)
     )
 
     cleaned = cleanup.clean_mesh(
@@ -305,16 +273,10 @@ def ingest(
     )
     ply_path = canonical_dir / written["files"]["ply"]["path"]
 
-    # The canonical mesh is never decimated (D-11).  The viewer copy is a
-    # separate file; when the canonical is already small it is a plain copy and
-    # ``applied`` records that honestly.
-    applied = bool(stats["triangle_count"] > target_triangles)
-    if applied:
-        viewer_vertices, viewer_faces = cleanup.decimate(
-            cleaned["vertices"], cleaned["faces"], target_triangles
-        )
-    else:
-        viewer_vertices, viewer_faces = cleaned["vertices"], cleaned["faces"]
+    # The canonical mesh and the viewer GLB share the same cleaned geometry.
+    # The pipeline no longer decimates the viewer copy.
+    applied = False
+    viewer_vertices, viewer_faces = cleaned["vertices"], cleaned["faces"]
     viewer_path = canonical_dir / "mesh_viewer.glb"
     meshio.write_glb(viewer_path, viewer_vertices, viewer_faces)
     viewer_vertex_count, viewer_triangle_count, _, _ = meshio.read_back_counts(
@@ -325,8 +287,8 @@ def ingest(
         "canonical_decimated": False,
         "viewer": {
             "applied": applied,
-            "method": "quadric",
-            "target_triangles": int(target_triangles),
+            "method": "none",
+            "target_triangles": None,
             "vertex_count": int(viewer_vertex_count),
             "triangle_count": int(viewer_triangle_count),
         },
@@ -341,7 +303,7 @@ def ingest(
     )
     config_path = (
         route_result.get("config_path")
-        or _CONFIG_PATHS.get(route)
+        or cfg.get("_source")
         or manifest.DEFAULT_CONFIG_PATH
     )
     dense_backend = str(
@@ -387,7 +349,7 @@ def ingest(
             "dense_backend": dense_backend,
             "tool_versions": tool_versions,
             "git_sha": _git_sha(),
-            "g3": {"status": "pending", "measurements": {}},
+            "g3": {"pass": False, "checks": {}},
         }
     )
     manifest_path = manifest.write_manifest(canonical_dir, built)
@@ -395,8 +357,8 @@ def ingest(
     try:
         validation = validate.validate_run(canonical_dir, verify_hashes=True)
     except validate.MeshValidationError as exc:
-        detail = "; ".join(exc.errors).strip()
-        raise IngestError(f"canonical mesh failed bundle validation: {detail}") from exc
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise IngestError(f"canonical mesh failed the Python validator: {detail}") from exc
 
     sha256sums_path = canonical_dir / "SHA256SUMS"
     report_path = canonical_dir / "ingest_report.json"
@@ -483,7 +445,6 @@ def ingest(
 
 __all__ = [
     "CAMERA_ENVELOPE_MARGIN_M",
-    "DEFAULT_VIEWER_MAX_TRIANGLES",
     "IngestError",
     "MESH_EXTENT_LIMIT_M",
     "ingest",

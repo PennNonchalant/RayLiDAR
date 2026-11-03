@@ -1,7 +1,7 @@
-"""Frozen mesh writers for the exported mesh bundle.
+"""Frozen mesh writers for the Phase-4 handoff (IO-03).
 
 The three containers written here are the only accepted export formats
-(``docs/sim-io.md`` §5):
+(frozen mesh contract §5):
 
 - binary little-endian PLY with ``comment frame W`` / ``comment units m``,
 - glTF 2.0 GLB with W/metre ``asset.extras`` and identity node transforms,
@@ -11,8 +11,8 @@ All positions are W-frame metres.  Nothing in this module rotates, scales, or
 otherwise re-expresses the input arrays; the writers are byte-level encoders
 plus read-back verification.
 
-Only NumPy and the standard library are used, so exporting does not depend on
-trimesh/Open3D being importable.
+Only NumPy and the standard library are used, so exporting and reading do not
+depend on a heavy mesh library.
 """
 
 from __future__ import annotations
@@ -456,5 +456,141 @@ __all__ = [
     "write_glb",
     "write_obj",
     "read_back_counts",
+    "read_mesh",
     "write_all",
 ]
+
+
+_PLY_TYPES = {
+    "char": "b", "int8": "b",
+    "uchar": "B", "uint8": "B",
+    "short": "h", "int16": "h",
+    "ushort": "H", "uint16": "H",
+    "int": "i", "int32": "i",
+    "uint": "I", "uint32": "I",
+    "float": "f", "float32": "f",
+    "double": "d", "float64": "d",
+}
+
+
+def _read_ply_mesh(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read a binary-little-endian PLY triangle mesh into (vertices, faces)."""
+    data = path.read_bytes()
+    marker = b"end_header\n"
+    end = data.find(marker)
+    if end < 0:
+        raise MeshFormatError(f"{path}: PLY header has no end_header")
+    header_text = data[: end + len(marker)].decode("ascii")
+    lines = header_text.splitlines()
+    if not lines or lines[0].strip() != "ply":
+        raise MeshFormatError(f"{path}: not a PLY file")
+    if "format binary_little_endian 1.0" not in [line.strip() for line in lines]:
+        raise MeshFormatError(f"{path}: PLY is not binary_little_endian 1.0")
+
+    elements: list[dict] = []
+    current: dict | None = None
+    for line in lines:
+        tokens = line.split()
+        if not tokens:
+            continue
+        if tokens[0] == "element" and len(tokens) >= 3:
+            current = {"name": tokens[1], "count": int(tokens[2]), "properties": []}
+            elements.append(current)
+        elif tokens[0] == "property" and current is not None:
+            if len(tokens) == 5 and tokens[1] == "list":
+                current["properties"].append(("list", tokens[2], tokens[3], tokens[4]))
+            elif len(tokens) == 3:
+                current["properties"].append(("scalar", tokens[1], tokens[2]))
+
+    body = data[len(header_text) :]
+    offset = 0
+    vertices = np.zeros((0, 3), dtype=np.float64)
+    faces = np.zeros((0, 3), dtype=np.int64)
+    for element in elements:
+        name = element["name"]
+        count = int(element["count"])
+        properties = element["properties"]
+        if name == "vertex":
+            if any(prop[0] == "list" for prop in properties):
+                raise MeshFormatError(f"{path}: vertex element has a list property")
+            names = [prop[2] for prop in properties]
+            if not all(axis in names for axis in ("x", "y", "z")):
+                raise MeshFormatError(f"{path}: vertex element lacks x/y/z")
+            formats = [_PLY_TYPES[prop[1]] for prop in properties]
+            record = struct.Struct("<" + "".join(formats))
+            if len(body) < offset + record.size * count:
+                raise MeshFormatError(f"{path}: vertex data is truncated")
+            base = offset
+            offset += record.size * count
+            vertices = np.empty((count, 3), dtype=np.float64)
+            ix, iy, iz = names.index("x"), names.index("y"), names.index("z")
+            for index in range(count):
+                values = record.unpack_from(body, base + index * record.size)
+                vertices[index, 0] = float(values[ix])
+                vertices[index, 1] = float(values[iy])
+                vertices[index, 2] = float(values[iz])
+        elif name == "face":
+            if not properties or properties[0][0] != "list":
+                raise MeshFormatError(f"{path}: face element lacks a vertex-index list")
+            _, count_type, index_type, _ = properties[0]
+            count_struct = struct.Struct("<" + _PLY_TYPES[count_type])
+            index_struct = struct.Struct("<" + _PLY_TYPES[index_type])
+            triangles: list[tuple[int, int, int]] = []
+            for _ in range(count):
+                if len(body) < offset + count_struct.size:
+                    raise MeshFormatError(f"{path}: face data is truncated")
+                (arity,) = count_struct.unpack_from(body, offset)
+                offset += count_struct.size
+                if len(body) < offset + index_struct.size * arity:
+                    raise MeshFormatError(f"{path}: face data is truncated")
+                indices = [index_struct.unpack_from(body, offset + i * index_struct.size)[0] for i in range(arity)]
+                offset += index_struct.size * arity
+                if arity < 3:
+                    raise MeshFormatError(f"{path}: face has fewer than three vertices")
+                for i in range(1, arity - 1):
+                    triangles.append((int(indices[0]), int(indices[i]), int(indices[i + 1])))
+            faces = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
+        else:
+            # Skip unknown elements only when they are scalar-only.
+            if any(prop[0] == "list" for prop in properties):
+                raise MeshFormatError(f"{path}: unsupported list element {name}")
+            record = struct.Struct("<" + "".join(_PLY_TYPES[prop[1]] for prop in properties))
+            offset += record.size * count
+    if vertices.shape[0] == 0 or faces.shape[0] == 0:
+        raise MeshFormatError(f"{path}: PLY has no triangles")
+    if faces.min() < 0 or faces.max() >= vertices.shape[0]:
+        raise MeshFormatError(f"{path}: PLY face index is out of range")
+    return vertices, faces
+
+
+def _read_obj_mesh(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    vertices: list[list[float]] = []
+    triangles: list[tuple[int, int, int]] = []
+    for line in path.read_text(encoding="ascii").splitlines():
+        tokens = line.split()
+        if not tokens or tokens[0].startswith("#"):
+            continue
+        if tokens[0] == "v" and len(tokens) >= 4:
+            vertices.append([float(value) for value in tokens[1:4]])
+        elif tokens[0] == "f" and len(tokens) >= 4:
+            indices = [int(token.split("/")[0]) - 1 for token in tokens[1:]]
+            for i in range(1, len(indices) - 1):
+                triangles.append((indices[0], indices[i], indices[i + 1]))
+    if not vertices or not triangles:
+        raise MeshFormatError(f"{path}: OBJ has no triangles")
+    return np.asarray(vertices, dtype=np.float64), np.asarray(triangles, dtype=np.int64)
+
+
+def read_mesh(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read a triangle mesh into ``(vertices float64, faces int64)``.
+
+    Only the formats actually produced by the canonical route are supported:
+    binary-little-endian PLY and OBJ.  No heavy mesh library is required.
+    """
+    destination = Path(path)
+    suffix = destination.suffix.lower()
+    if suffix == ".ply":
+        return _read_ply_mesh(destination)
+    if suffix == ".obj":
+        return _read_obj_mesh(destination)
+    raise MeshFormatError(f"{destination}: read_mesh supports .ply and .obj, got {suffix!r}")

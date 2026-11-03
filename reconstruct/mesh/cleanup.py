@@ -1,13 +1,9 @@
-"""Deterministic mesh welding, degeneracy, components, cleanup, and decimation.
+"""Deterministic mesh welding, degeneracy, components, and cleanup.
 
-The functions here are the numeric half of RECON-04 (D-08): every count and
-fraction is computed from the arrays with NumPy, never inferred from a writer's
-claim.  Only NumPy and the standard library are imported at module level;
-Open3D is imported lazily inside :func:`decimate` so the statistics layer stays
-import-cheap and decimation is never a hidden requirement.
-
-The canonical mesh is never decimated (D-11).  :func:`decimate` exists only for
-the separate viewer GLB produced by :mod:`reconstruct.ingest`.
+The functions here are the numeric half of the reconstruction contract: every
+count and fraction is computed from the arrays with NumPy, never inferred from a
+writer's claim.  Only NumPy and the standard library are imported; no heavy
+meshing library is required.
 """
 
 from __future__ import annotations
@@ -296,38 +292,6 @@ def clean_mesh(
     }
 
 
-def decimate(
-    vertices: Any, faces: Any, target_triangles: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """Quadric-decimate a mesh for the viewer copy only (never the canonical).
-
-    Returns the input arrays unchanged when the mesh already has at most
-    ``target_triangles`` triangles, so the caller can record
-    ``viewer.applied = false`` without importing Open3D.
-    """
-    vertex_array = _as_vertices(vertices)
-    face_array = _as_faces(faces, vertex_array.shape[0])
-    target = int(target_triangles)
-    if target < 1:
-        raise CleanupError("target_triangles must be at least 1")
-    if face_array.shape[0] <= target:
-        return vertex_array.copy(), face_array.copy()
-
-    import open3d as o3d  # imported lazily; statistics never need Open3D
-
-    mesh = o3d.geometry.TriangleMesh()
-    mesh.vertices = o3d.utility.Vector3dVector(vertex_array)
-    mesh.triangles = o3d.utility.Vector3iVector(
-        np.ascontiguousarray(face_array, dtype=np.int32)
-    )
-    simplified = mesh.simplify_quadric_decimation(target)
-    reduced_vertices = np.asarray(simplified.vertices, dtype=np.float64)
-    reduced_faces = np.asarray(simplified.triangles, dtype=np.int64)
-    if reduced_vertices.shape[0] == 0 or reduced_faces.shape[0] == 0:
-        raise CleanupError("quadric decimation produced an empty mesh")
-    return reduced_vertices, reduced_faces
-
-
 __all__ = [
     "CleanupError",
     "DEFAULT_MIN_COMPONENT_TRIANGLES",
@@ -335,7 +299,6 @@ __all__ = [
     "DEGENERATE_AREA_M2",
     "clean_mesh",
     "connected_components",
-    "decimate",
     "degenerate_faces",
     "weld_vertices",
 ]

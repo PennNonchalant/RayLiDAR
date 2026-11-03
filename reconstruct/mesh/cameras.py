@@ -5,13 +5,13 @@ rectified ``image_00`` PNGs and ``geometry/*`` (cameras, calibration, poses).
 Evaluation data (GT points, frozen rays, LiDAR) is never reachable from this
 module (D-14, T-04-02-02).
 
-All transforms follow ``docs/frames.md``: ``T_AB`` maps ``p_B`` into frame A
+All transforms follow the frozen KITTI-360 frame contract: ``T_AB`` maps ``p_B`` into frame A
 (``p_A = T_AB * p_B``), the world frame is KITTI-360 ``W`` in metres, and there
 is no second convention, scale, or alignment step.
 
 Tolerances are file-precision-aware.  ``geometry/cameras.json`` composes
 ``T_W_Ck_rect`` through ``R_rect``, whose orthonormality defect measures
-``9.93e-7``; ``docs/frames.md`` therefore sets the official rotation gate at
+``9.93e-7``; the official rotation gate is therefore set at
 ``2e-6``.  ``T_W_V`` is composed from the pose chain and measures below
 ``2e-10``, so it keeps the strict ``1e-9`` gate.
 """
@@ -28,15 +28,13 @@ import numpy as np
 
 from .contracts import WindowSpec
 
-# Documented gate for official KITTI-360 rectified/world rotations (docs/frames.md).
+# Gate for official KITTI-360 rectified/world rotations.
 ROTATION_ATOL = 2e-6
 # Gate for transforms composed from the pose chain (T_W_I / T_I_C0 / T_V_C0).
 STRICT_ROTATION_ATOL = 1e-9
 # Bottom-row and shape checks are exact in the bundle; allow only float noise.
 BOTTOM_ROW_ATOL = 1e-12
 
-SMOKE_FRAMES: tuple[int, ...] = tuple(range(4615, 4625))
-FULL_FRAMES: tuple[int, ...] = tuple(range(4615, 4675))
 BUNDLE_FRAME_COUNT = 60
 IMAGE_CAMERAS: tuple[str, ...] = ("image_00", "image_01")
 DEFAULT_CAMERA = "image_00"
@@ -279,35 +277,36 @@ def load_bundle(root: str | Path) -> Bundle:
     return bundle
 
 
-def _canonical_window(frames: Iterable[int], *, where: str) -> tuple[str, tuple[int, ...]]:
-    requested = tuple(int(frame) for frame in frames)
-    if requested == SMOKE_FRAMES:
-        return "smoke", SMOKE_FRAMES
-    if requested == FULL_FRAMES:
-        return "full", FULL_FRAMES
-    raise BundleError(
-        f"{where}: window must equal the smoke {SMOKE_FRAMES[0]}-{SMOKE_FRAMES[-1]} "
-        f"or full {FULL_FRAMES[0]}-{FULL_FRAMES[-1]} window exactly"
-    )
+def window_frames(
+    bundle: Bundle,
+    name_or_frames: str | Iterable[int],
+    *,
+    allow_arbitrary: bool = False,
+) -> WindowSpec:
+    """Return a :class:`~reconstruct.mesh.contracts.WindowSpec`.
 
-
-def window_frames(bundle: Bundle, name_or_frames: str | Iterable[int]) -> WindowSpec:
-    """Return a :class:`~reconstruct.contracts.WindowSpec`.
-
-    Accepts ``"smoke"``, ``"full"``, or an explicit frame list that equals one
-    of the two canonical windows exactly.  Arbitrary or evaluation-frame-picked
-    windows are rejected (D-02).
+    The window is derived from the loaded bundle, never from a hard-coded
+    segment: ``"smoke"`` means the first ten bundle frames and ``"full"`` means
+    every bundle frame.  An explicit list may also be supplied; it is validated
+    against the bundle and the pose contract.
     """
     if isinstance(name_or_frames, str):
         name = name_or_frames
         if name == "smoke":
-            frames = SMOKE_FRAMES
+            frames = tuple(bundle.frames[:10])
         elif name == "full":
-            frames = FULL_FRAMES
+            frames = tuple(bundle.frames)
         else:
             raise BundleError(f"unknown window: {name!r}")
     else:
-        name, frames = _canonical_window(name_or_frames, where="window_frames")
+        frames = tuple(int(frame) for frame in name_or_frames)
+        if not frames:
+            raise BundleError("window_frames: empty window")
+        try:
+            WindowSpec("window", frames)
+        except ValueError as exc:
+            raise BundleError(f"window_frames: invalid window: {exc}") from exc
+        name = "smoke" if len(frames) == 10 else "full" if len(frames) == len(bundle.frames) else "window"
 
     missing = [frame for frame in frames if frame not in bundle.frames_by_id]
     if missing:
@@ -349,8 +348,8 @@ def T_C_W(bundle: Bundle, frame: int, camera: str = DEFAULT_CAMERA) -> np.ndarra
 def T_W_V(bundle: Bundle, frame: int) -> np.ndarray:
     """World→Velodyne transform ``T_W_V = T_W_I * T_I_C0 * inv(T_V_C0)``.
 
-    There is no LiDAR data read here; only calibration and pose matrices are
-    used.
+    Mirrors ``raylidar::calib::ComposeTWV`` exactly.  There is no LiDAR data
+    read here; only calibration and pose matrices are used.
     """
     rows = bundle.frame_rows.get(int(frame))
     if rows is None:
@@ -386,10 +385,8 @@ __all__ = [
     "Bundle",
     "BundleError",
     "DEFAULT_CAMERA",
-    "FULL_FRAMES",
     "IMAGE_CAMERAS",
     "ROTATION_ATOL",
-    "SMOKE_FRAMES",
     "STRICT_ROTATION_ATOL",
     "T_C_W",
     "T_W_C",

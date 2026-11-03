@@ -1,7 +1,7 @@
 """Lazy route resolution plus the pipeline ``build`` stage entry.
 
-Route modules import heavy dependencies (``open3d``, OpenMVS helpers), so the
-package never imports them eagerly.  A missing implementation is reported as
+Route modules import the OpenMVS helpers lazily, so the package never imports
+them eagerly.  A missing implementation is reported as
 :class:`RouteUnavailable` with the underlying reason.
 
 Route selection is *config only*: the YAML ``route:`` value (or an explicit
@@ -21,19 +21,14 @@ from typing import Any, Mapping, Sequence
 from ..config import config_sha256, load_config
 from ..contracts import RouteDescriptor, WindowSpec
 
-_PACKAGE = (__package__ or "reconstruct.routes").rsplit(".", 1)[0]
-
 ROUTES: dict[str, str] = {
-    "colmap_openmvs": f"{_PACKAGE}.routes.colmap_openmvs:ColmapOpenMVS",
-    "open3d_alpha": f"{_PACKAGE}.routes.open3d_alpha:Open3DAlpha",
-    "openmvs_direct": f"{_PACKAGE}.routes.openmvs_direct:OpenMVSDirect",
+    "colmap_openmvs": "reconstruct.mesh.routes.colmap_openmvs:ColmapOpenMVS",
 }
 
-# Stage sequence per runnable route; ``openmvs_direct`` is a preflight only.
+# The canonical COLMAP -> OpenMVS route is the only supported reconstruction
+# method.
 STAGE_SEQUENCES: dict[str, tuple[str, ...]] = {
     "colmap_openmvs": ("model", "build"),
-    "open3d_alpha": ("model", "dense", "build"),
-    "openmvs_direct": (),
 }
 
 
@@ -106,11 +101,7 @@ def build(
     descriptor: RouteDescriptor = route.describe()
 
     window = WindowSpec(window_name, tuple(int(frame) for frame in frames))
-    dense_cloud: Path | None = None
-    if isinstance(dense_result, Mapping) and dense_result.get("fused_ply"):
-        dense_cloud = Path(str(dense_result["fused_ply"]))
-
-    output = route.build(window, Path(workdir), dense_cloud)
+    output = route.build(window, Path(workdir), None)
     report = getattr(route, "report", None) or {}
     report_path = getattr(route, "report_path", None)
 
@@ -142,94 +133,17 @@ def build(
 # --------------------------------------------------------------------------- #
 
 
-def fallback_state(out_root: str | Path) -> dict[str, Any]:
-    """Return the recorded dense-backend decision, if any.
-
-    The 04-02 checkpoint writes ``route_decisions/dense-backend.json`` only when
-    the CUDA COLMAP probe fails.  Absence therefore means the D-04 COLMAP dense
-    backend was used and no fallback is active.
-    """
-    path = Path(out_root) / "route_decisions" / "dense-backend.json"
-    if not path.is_file():
-        return {"backend": None, "path": str(path), "recorded": False}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RouteUnavailable(f"corrupt dense-backend decision {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise RouteUnavailable(f"dense-backend decision {path} is not a mapping")
-    backend = (
-        payload.get("backend")
-        or payload.get("dense_backend")
-        or payload.get("selection")
-        or payload.get("decision")
-    )
-    return {
-        "backend": backend,
-        "path": str(path),
-        "recorded": True,
-        "payload": payload,
-    }
-
-
 def route_smoke_preflight(
     route_name: str | None,
     config_path: str | Path,
     out_root: str | Path | None = None,
 ) -> tuple[int, str]:
-    """Validate a ``--route-smoke`` request; return ``(exit_code, message)``.
-
-    ``0`` means runnable, ``2`` means the route is declared but unsupported,
-    ``3`` means a missing precondition (the canonical route must run first).
-    """
+    """Validate a ``--route-smoke`` request; return ``(exit_code, message)``."""
     cfg = load_config(config_path)
     requested = route_name or str(cfg["route"])
     if requested not in ROUTES:
         return 2, f"unknown route: {requested}"
-    if requested == "openmvs_direct":
-        from .openmvs_direct import UNAVAILABLE_REASON
-
-        return 2, UNAVAILABLE_REASON
-    if requested == "open3d_alpha":
-        state = fallback_state(out_root or cfg["out_root"])
-        if state.get("backend") == "openmvs_densify":
-            return (
-                3,
-                "dense-backend decision records openmvs_densify: run the "
-                "canonical colmap_openmvs route first so scene_dense.ply exists; "
-                "the Open3D route will never invent a different point cloud",
-            )
     return 0, ""
-
-
-def seed_open3d_dense(
-    workdir: str | Path,
-    dense_cloud: str | Path,
-    *,
-    source: str = "openmvs_densify",
-) -> Path:
-    """Write ``stages/dense.json`` seeding the Open3D route's dense input.
-
-    Used only by the approved ``openmvs_densify`` fallback: the Open3D mesher
-    then consumes the canonical run's ``scene_dense.ply`` without re-running the
-    COLMAP dense stage.
-    """
-    dense_cloud = Path(dense_cloud)
-    if not dense_cloud.is_file():
-        raise RouteUnavailable(
-            f"fallback dense cloud is missing: {dense_cloud}; run the canonical "
-            "colmap_openmvs route first"
-        )
-    payload = {
-        "dense_result": {
-            "dense_backend": source,
-            "dense_cloud_source": source,
-            "fused_ply": str(dense_cloud),
-        }
-    }
-    path = Path(workdir) / "stages" / "dense.json"
-    _write_json(path, payload)
-    return path
 
 
 def _ab_row(route_name: str, build_payload: Mapping) -> dict[str, Any]:
@@ -291,10 +205,8 @@ __all__ = [
     "STAGE_SEQUENCES",
     "RouteUnavailable",
     "build",
-    "fallback_state",
     "resolve_route",
     "route_smoke_preflight",
     "route_stages",
-    "seed_open3d_dense",
     "write_ab_from_stages",
 ]

@@ -5,7 +5,7 @@ reconstruction logic and import nothing heavier than the standard library so
 that configuration and dispatch stay cheap to import.
 
 All coordinates are in the KITTI-360 world frame ``W`` and in metres; there is
-no second frame, no scale, and no embedded model transform (``docs/sim-io.md``).
+no second frame, no scale, and no embedded model transform.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ class RawRouteOutput:
 
 @dataclass(frozen=True)
 class MeshArtifact:
-    """Canonical mesh metadata describing an exported mesh bundle.
+    """Canonical mesh metadata handed to the ingest gate.
 
     ``frame`` is always ``"W"`` and ``units`` always ``"m"``; the defaults are
     part of the frozen contract, not a convenience.

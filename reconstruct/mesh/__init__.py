@@ -1,34 +1,14 @@
-"""Standalone mesh reconstruction package.
+"""Canonical COLMAP -> OpenMVS mesh reconstruction package.
 
-The package owns the whole mesh pipeline behind one import boundary:
+The reconstruction plugs into the frozen contract layer:
 
-- :mod:`reconstruct.contracts` — window/artifact/route data contracts,
-- :mod:`reconstruct.config` — strict YAML loading + canonical config hash,
-- :mod:`reconstruct.colmap_model` — known-pose COLMAP preprocessing,
-- :mod:`reconstruct.routes` — lazy reconstruction-route resolution,
-- :mod:`reconstruct.ingest` — canonical cleanup, export, and manifest,
-- :mod:`reconstruct.g3` — diagnostic measurements,
-- :mod:`reconstruct.report` — A/B report and asset promotion.
+- :mod:`reconstruct.mesh.contracts` — window/artifact/route data contracts,
+- :mod:`reconstruct.mesh.config` — strict YAML loading + canonical config hash,
+- :mod:`reconstruct.mesh.pipeline` — the stage dispatch table,
+- :mod:`reconstruct.mesh.routes` — lazy route resolution.
 
-Nothing here imports the C++ tree, the evaluation harness, or any other
-repository module. Heavy dependencies (``open3d``, ``trimesh``) are imported
-inside the stage that needs them, so configuration and dispatch stay cheap.
+Route helpers are imported only inside the stage that needs them, so
+configuration, hashing, and stage dispatch stay import-cheap.
 """
 
-__all__ = [
-    "cameras",
-    "cleanup",
-    "colmap_model",
-    "config",
-    "contracts",
-    "dense",
-    "env",
-    "g3",
-    "ingest",
-    "manifest",
-    "meshio",
-    "pipeline",
-    "report",
-    "routes",
-    "validate",
-]
+__all__ = ["contracts", "config", "pipeline", "routes"]

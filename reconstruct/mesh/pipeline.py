@@ -1,9 +1,8 @@
-"""Stage dispatch for the standalone mesh reconstruction pipeline.
+"""Stage dispatch for the Phase-4 reconstruction pipeline.
 
 The pipeline is a table of six stages.  Each stage is a pure function of the
 context keys it declares plus files under ``workdir``; there is no global
-mutable state.  The package only depends on the Python standard library, NumPy,
-the declared optional mesh libraries, and external reconstruction binaries.
+mutable state.  Later plans add stage modules, never new CLI flags.
 """
 
 from __future__ import annotations
@@ -30,29 +29,23 @@ class StageContractError(RuntimeError):
     """A stage was called without a context key or argument it requires."""
 
 
-# The package name is resolved at import time so this module keeps working if
-# the package is vendored under a different top-level name.
-_PACKAGE = __package__ or "reconstruct"
-
 # stage -> "module:callable"
 STAGES: dict[str, str] = {
-    "model": f"{_PACKAGE}.colmap_model:run",
-    "dense": f"{_PACKAGE}.dense:produce",
-    "build": f"{_PACKAGE}.routes:build",
-    "ingest": f"{_PACKAGE}.ingest:ingest",
-    "gate": f"{_PACKAGE}.g3:evaluate",
-    "report": f"{_PACKAGE}.report:write",
+    "model": "reconstruct.mesh.colmap_model:run",
+    "build": "reconstruct.mesh.routes:build",
+    "ingest": "reconstruct.mesh.ingest:ingest",
+    "gate": "reconstruct.mesh.g3:evaluate",
+    "report": "reconstruct.mesh.report:write",
 }
 
-STAGE_ORDER: tuple[str, ...] = ("model", "dense", "build", "ingest", "gate", "report")
+STAGE_ORDER: tuple[str, ...] = ("model", "build", "ingest", "gate", "report")
 
 
 def stage_sequence(route_name: str) -> tuple[str, ...]:
     """Return the stages a route actually runs, in order.
 
-    The canonical route densifies inside its own ``build`` stage, so it never
-    runs the shared ``dense`` stage; the Open3D mesher consumes a COLMAP dense
-    cloud and therefore does.  ``report`` is always last.
+    The canonical route densifies inside its own ``build`` stage. ``report`` is
+    always last.
     """
     prefix = tuple(stage for stage in route_stages(route_name) if stage in STAGES)
     return prefix + ("ingest", "gate", "report")
@@ -61,7 +54,6 @@ def stage_sequence(route_name: str) -> tuple[str, ...]:
 # Which context key receives the stage's own result payload.
 STAGE_CONTEXT_KEYS: dict[str, str | None] = {
     "model": "colmap_result",
-    "dense": "dense_result",
     "build": "route_result",
     "ingest": "artifact",
     "gate": "g3_report",
@@ -79,7 +71,6 @@ CONTEXT_KEYS: tuple[str, ...] = (
     "env",
     "config_sha256",
     "colmap_result",
-    "dense_result",
     "route_result",
     "artifact",
     "g3_report",
@@ -185,7 +176,6 @@ def _build_context(
         "env": env,
         "config_sha256": config_sha256(cfg),
         "colmap_result": None,
-        "dense_result": None,
         "route_result": None,
         "artifact": None,
         "g3_report": None,
@@ -206,8 +196,8 @@ def _load_env_report(cfg: dict) -> dict:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog=f"python -m {_PACKAGE}.pipeline",
-        description="Mesh reconstruction stage dispatcher",
+        prog="python -m reconstruct.mesh.pipeline",
+        description="Phase-4 reconstruction stage dispatcher",
     )
     parser.add_argument("--config", required=True, help="route config YAML")
     parser.add_argument("--stage", help="run exactly this stage")

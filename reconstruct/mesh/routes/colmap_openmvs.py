@@ -275,15 +275,13 @@ def camera_centers_from_model(
 
 
 def read_mesh(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
-    """Read a triangle mesh into ``(vertices, faces)`` with lazy Open3D import."""
-    import open3d as o3d
+    """Read a triangle mesh into ``(vertices, faces)`` with the pure-Python reader."""
+    from ..meshio import MeshFormatError, read_mesh as read_mesh_file
 
-    mesh = o3d.io.read_triangle_mesh(str(path))
-    vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    faces = np.asarray(mesh.triangles, dtype=np.int64)
-    if vertices.size == 0 or faces.size == 0:
-        raise RouteError(f"mesh {path} has no vertices or triangles")
-    return vertices, faces
+    try:
+        return read_mesh_file(path)
+    except MeshFormatError as exc:
+        raise RouteError(str(exc)) from exc
 
 
 def _ensure_link(target: Path, source: Path) -> None:

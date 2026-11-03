@@ -525,10 +525,10 @@ def run(
     colmap_dir.mkdir(parents=True, exist_ok=True)
 
     bundle = load_bundle(bundle_root)
-    window = window_frames(bundle, window_name)
+    window = window_frames(bundle, frames, allow_arbitrary=True)
     if tuple(int(frame) for frame in frames) != window.frames:
         raise ColmapError(
-            f"config frames {tuple(frames)} are not the canonical {window.name} window"
+            f"config frames {tuple(frames)} do not match the validated {window.name} window"
         )
 
     params = cfg.get("params") or {}

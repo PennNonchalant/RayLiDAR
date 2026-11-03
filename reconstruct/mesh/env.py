@@ -1,4 +1,4 @@
-"""Environment probe for the mesh reconstruction runtime.
+"""Environment probe for the Phase-4 reconstruction runtime.
 
 The module only *inspects* the runtime; it never installs anything.  Tool
 provisioning happens through explicit container shell steps and is recorded in
@@ -206,9 +206,7 @@ def probe_environment(
         ),
         "python": {"executable": sys.executable, "version": sys.version.split()[0]},
         "packages": {
-            "open3d": _package_version("open3d"),
             "numpy": _package_version("numpy"),
-            "trimesh": _package_version("trimesh"),
             "pyyaml": _package_version("PyYAML"),
         },
         "colmap": colmap,
@@ -234,12 +232,12 @@ def write_env_report(out_path: Path, report: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog=f"python -m {__package__}.env",
-        description="Probe the mesh reconstruction toolchain",
+        prog="python -m reconstruct.mesh.env",
+        description="Probe the Phase-4 reconstruction toolchain",
     )
     parser.add_argument(
         "--bundle-root",
-        default="/data-20T/hybrid-lidar-sim/exports/p2-60f-step10-4615-4674",
+        default="/data-20T/hybrid-lidar-sim/exports/reconstruct-bundle",
     )
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     args = parser.parse_args(argv)

@@ -1,10 +1,9 @@
-"""``mesh_manifest.json`` builder, writer, and schema validator.
+"""Phase-4 ``mesh_manifest.json`` builder, writer, and schema validator.
 
-The manifest describes the exported mesh bundle on its own.  Every hash, byte
-count, vertex/triangle count, and bounding box in it is copied from the files
-that were actually written (``meshio.write_all`` already re-reads and hashes
-each file), never from a caller's claim.  Validation is pure Python and never
-invokes a C++ binary.
+The manifest is the handoff contract between reconstruction and the ingest
+gate.  Every hash, byte count, vertex/triangle count, and bounding box in it is
+copied from the files that were actually written (``meshio.write_all`` already
+re-reads and hashes each file), never from a caller's claim.
 """
 
 from __future__ import annotations
@@ -24,10 +23,7 @@ KIND = "mesh"
 FRAME = "W"
 UNITS = "m"
 
-_PACKAGE_ROOT = Path(__file__).resolve().parent
-DEFAULT_CONFIG_PATH = str(
-    _PACKAGE_ROOT / "configs" / "canonical_colmap_openmvs.yaml"
-)
+DEFAULT_CONFIG_PATH = "reconstruct/configs/mesh_1820.yaml"
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _FILE_FORMATS = ("ply", "glb", "obj")
@@ -129,7 +125,7 @@ def _normalise_viewer(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_manifest(run: dict[str, Any]) -> dict[str, Any]:
-    """Build the manifest from the written artifacts in ``run``.
+    """Build the frozen Phase-4 manifest from the written artifacts in ``run``.
 
     Required inputs: ``route``, ``config_sha256``, and ``files`` (the
     ``write_all`` result).  Canonical counts and bbox always come from the PLY
@@ -229,7 +225,7 @@ def build_manifest(run: dict[str, Any]) -> dict[str, Any]:
         "dense_backend": run.get("dense_backend", ""),
         "tool_versions": dict(run.get("tool_versions") or {}),
         "git_sha": run.get("git_sha", ""),
-        "g3": run.get("g3") or {"status": "pending", "measurements": {}},
+        "g3": run.get("g3") or {"pass": False, "checks": {}},
     }
 
 

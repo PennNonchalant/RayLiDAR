@@ -1,7 +1,7 @@
 """A/B evidence, canonical asset promotion, local index, and handoff note.
 
-This module is the last pipeline boundary.  It never re-runs reconstruction: it
-reads the persisted stage records, writes ``ab_report.md`` with the diagnostic
+This module is the last Phase-4 boundary.  It never re-runs reconstruction: it
+reads the persisted stage records, writes ``ab_report.md`` with the D-12
 metrics, and copies the canonical PLY/GLB/OBJ and viewer GLB into
 ``/data-20T/hybrid-lidar-sim/assets/mesh/<run-id>/``, re-hashing every copied
 byte, writing ``SHA256SUMS`` and merging the local ``index.json``.
@@ -33,14 +33,6 @@ MANIFEST_FILE = "mesh_manifest.json"
 SUMS_FILE = "SHA256SUMS"
 INVALID_MARKER = ".invalid"
 RESOURCE_LIMIT = "not_run_resource_limit"
-
-# D-04: the Open3D A/B route shares the dense cloud, so the comparison is not
-# an independent MVS comparison.  The sentence is fixed for the report.
-MESHER_COMPARISON_SENTENCE = (
-    "The A/B comparison is a mesher comparison on the same dense point cloud, "
-    "not an independent MVS comparison."
-)
-
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -210,17 +202,26 @@ def _check_metric(route: Mapping[str, Any], name: str, key: str) -> Any:
 def _z_band_state(route: Mapping[str, Any]) -> str:
     """Render the G3-AMEND-01 z sanity band for one route."""
     band = (
-        ((route.get("g3_measurements") or {}).get("bbox_ratio_ok") or {}).get(
+        ((route.get("g3_measurements") or {}).get("bbox_ratio") or {}).get(
             "measured"
         )
         or {}
     ).get("height_band")
     if not isinstance(band, dict):
         return "-"
-    ok = bool(band.get("z_min_ok")) and bool(band.get("z_max_ok")) and bool(
-        band.get("overlap")
+    mesh_z_min = float(band.get("mesh_z_min_m"))
+    mesh_z_max = float(band.get("mesh_z_max_m"))
+    gt_z_min = float(band.get("gt_z_min_m"))
+    gt_z_max = float(band.get("gt_z_max_m"))
+    z_min_margin = float(band.get("z_min_margin_m"))
+    z_max_margin = float(band.get("z_max_margin_m"))
+    within = (
+        mesh_z_min >= gt_z_min - z_min_margin
+        and mesh_z_max <= gt_z_max + z_max_margin
+        and mesh_z_min <= gt_z_max
+        and gt_z_min <= mesh_z_max
     )
-    return "within" if ok else "outside"
+    return "within" if within else "outside"
 
 
 def _ab_markdown(
@@ -231,36 +232,17 @@ def _ab_markdown(
     run_id: str | None,
 ) -> str:
     thresholds = g3_report.get("reference_thresholds") or {}
-    directions = (
-        (g3_report.get("metrics") or {}).get("camera_outside") or {}
-    ).get("directions") or {}
-    smoke_frames = g3_report.get("smoke_range_frames") or (cfg.get("windows") or {}).get(
-        "smoke"
-    ) or []
-    canonical_backend = None
-    for route in routes:
-        if route.get("route") == cfg.get("route"):
-            canonical_backend = route.get("dense_cloud_source") or route.get("dense_backend")
-            break
-    if canonical_backend is None and routes:
-        canonical_backend = routes[0].get("dense_cloud_source") or routes[0].get(
-            "dense_backend"
-        )
-    sources = {
-        route.get("dense_cloud_source") or route.get("dense_backend")
-        for route in routes
-    }
-    sources.discard(None)
+    smoke_frames = (cfg.get("windows") or {}).get("smoke") or []
+    gt_frames = g3_report.get("gt_frames") or ["-"]
 
     lines: list[str] = []
-    lines.append("# Mesh reconstruction A/B report")
+    lines.append("# Mesh reconstruction report")
     lines.append("")
     lines.append(f"- Generated: `{_utc_now()}`")
     lines.append(f"- Canonical run: `{run_id or '-'}` (route `{cfg.get('route')}`)")
-    gt_frames = g3_report.get("gt_frames") or ["-"]
     lines.append(
         f"- Windows: smoke `{smoke_frames[0] if smoke_frames else '-'}-"
-        f"{smoke_frames[-1] if smoke_frames else '-'}` (D-02); "
+        f"{smoke_frames[-1] if smoke_frames else '-'}`; "
         f"full `{gt_frames[0]}-{gt_frames[-1]}`"
     )
     lines.append(
@@ -271,30 +253,10 @@ def _ab_markdown(
     lines.append("## Provenance")
     lines.append("")
     lines.append(
-        f"The canonical route is `{cfg.get('route')}`; its dense backend is "
-        f"`{canonical_backend or 'unknown'}`. No mesh was aligned, scaled, or "
-        "fitted to the camera trajectory or to the GT extent."
+        f"The canonical route is `{cfg.get('route')}`. No mesh was aligned, "
+        "scaled, or fitted to the camera trajectory or to the GT extent."
     )
     lines.append("")
-    if sources == {"openmvs_densify"}:
-        lines.append(MESHER_COMPARISON_SENTENCE)
-        lines.append("")
-    elif sources == {"colmap_cuda"}:
-        lines.append(
-            "Both runnable routes mesh the same COLMAP CUDA PatchMatch fused "
-            "cloud, so the comparison is a mesher comparison on one dense input; "
-            "it is not an independent MVS comparison."
-        )
-        lines.append("")
-    else:
-        lines.append(
-            "The routes do not share a dense cloud: the canonical route densifies "
-            "with OpenMVS `DensifyPointCloud` (`scene_dense.ply`), while the Open3D "
-            "route meshes the COLMAP CUDA PatchMatch fused cloud (`fused.ply`). "
-            "The A/B therefore differs in both densification and meshing; it is "
-            "not an independent MVS comparison either way."
-        )
-        lines.append("")
     lines.append("## Route comparison")
     lines.append("")
     lines.append(
@@ -331,20 +293,18 @@ def _ab_markdown(
     lines.append("## G3 diagnostics (full window; reference values are not enforced)")
     lines.append("")
     lines.append(
-        "| route | status | bbox ratio (x,y) | z band | forward hit rate | near hits "
-        "| components | largest fraction | degenerate fraction | smoke median (m) |"
+        "| route | status | bbox ratio (x,y) | z band | components "
+        "| largest fraction | degenerate fraction |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|")
     for route in routes:
-        ratio = _check_metric(route, "bbox_ratio_ok", "ratio")
+        ratio = _check_metric(route, "bbox_ratio", "ratio")
         if isinstance(ratio, list):
             ratio_text = ", ".join(
                 "-" if value is None else f"{float(value):.3f}" for value in ratio
             )
         else:
             ratio_text = "-"
-        near = _check_metric(route, "camera_outside_ok", "near_hit_count")
-        median = _check_metric(route, "smoke_range_ok", "median_abs_error_m")
         lines.append(
             "| "
             + " | ".join(
@@ -353,12 +313,9 @@ def _ab_markdown(
                     _cell(route.get("g3_status")),
                     _cell(ratio_text),
                     _cell(_z_band_state(route)),
-                    _cell(_check_metric(route, "camera_outside_ok", "forward_hit_rate")),
-                    _cell(near),
-                    _cell(_check_metric(route, "components_ok", "component_count")),
-                    _cell(_check_metric(route, "components_ok", "largest_component_fraction")),
-                    _cell(_check_metric(route, "degenerate_ok", "degenerate_fraction")),
-                    _cell(median),
+                    _cell(_check_metric(route, "components", "component_count")),
+                    _cell(_check_metric(route, "components", "largest_component_fraction")),
+                    _cell(_check_metric(route, "degenerate", "degenerate_fraction")),
                 ]
             )
             + " |"
@@ -373,18 +330,10 @@ def _ab_markdown(
             f"(approved {amendment.get('approved_at_utc') or '-'}): the GT extent "
             "is the camera-visible static subset "
             f"(`camera < {thresholds.get('gt_visible_camera_max', '-')}`); x/y "
-            "footprint plus a z sanity band; forward hit rate has a lower bound "
-            "only; the largest-component threshold is "
+            "footprint plus a z sanity band; the largest-component reference is "
             f"`{thresholds.get('largest_component_fraction_min', '-')}`."
         )
         lines.append("")
-    lines.append("Camera-outside directions, camera frame (`+z` optical axis), D-07:")
-    lines.append("")
-    for name, direction in directions.items():
-        lines.append(
-            f"- `{name}`: [{', '.join(f'{float(v):.4f}' for v in direction)}]"
-        )
-    lines.append("")
     lines.append("Reference values (diagnostic only; not enforced):")
     lines.append("")
     for key in (
@@ -393,41 +342,16 @@ def _ab_markdown(
         "bbox_axes",
         "mesh_z_min_margin_m",
         "mesh_z_max_margin_m",
-        "forward_hit_rate_min",
-        "near_hit_max_m",
         "largest_component_fraction_min",
         "degenerate_fraction_max",
-        "smoke_median_abs_error_m_max",
-        "ray_t_min_m",
-        "camera_outside_t_max_m",
         "gt_visible_camera_max",
     ):
         if key in thresholds:
             lines.append(f"- `{key}` = {thresholds[key]}")
     lines.append("")
     lines.append(
-        f"Smoke range frames (D-02): `{smoke_frames[0] if smoke_frames else '-'}`"
-        f"-`{smoke_frames[-1] if smoke_frames else '-'}`."
-    )
-    lines.append("")
-    lines.append("## What this does not show")
-    lines.append("")
-    lines.append(
-        "- No full-window range, Chamfer distance, F-score, or ray recall: those "
-        "are Phase 5/6 metrics computed on GPU hits."
-    )
-    lines.append(
-        "- No textured or photorealistic realism: RGB is reconstruction input, not "
-        "a material model."
-    )
-    lines.append(
         "- No independent MVS comparison: the canonical route densifies with "
-        "OpenMVS and the Open3D route meshes the COLMAP CUDA cloud; neither was "
-        "compared against an independent MVS implementation."
-    )
-    lines.append(
-        "- No alignment evidence: nothing was aligned, fitted, or rescaled; a "
-        "failing route stayed failing."
+        "OpenMVS and meshes that cloud; no second MVS implementation was run."
     )
     lines.append("")
     return "\n".join(lines)
@@ -468,7 +392,7 @@ def _handoff_markdown(
         "## Validation",
         "",
         "```bash",
-        f"python -m reconstruct.validate --manifest {manifest} "
+        f"python -m reconstruct.mesh.validate --manifest {manifest} "
         f"--run-dir {asset_dir} --verify-hashes",
         "```",
         "",
@@ -684,7 +608,7 @@ def update_index(
 
 
 # --------------------------------------------------------------------------- #
-# CLI for the report / promotion stage
+# CLI used by reconstruct/pipeline/mesh.sh --promote
 # --------------------------------------------------------------------------- #
 
 
@@ -733,8 +657,8 @@ def _discover_routes(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog=f"python -m {__package__}.report",
-        description="Mesh reconstruction A/B report and asset promotion",
+        prog="python -m reconstruct.mesh.report",
+        description="Phase-4 A/B report and canonical asset promotion",
     )
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--config", required=True)
@@ -761,10 +685,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.workdir
         else out_root / "runs" / args.run_id / "full"
     )
-    gate_path = workdir / "g3_report.json"
-    g3_report = _read_json(gate_path)
+    g3_report_path = workdir / "g3_report.json"
+    g3_report = _read_json(g3_report_path)
     if g3_report is None:
-        print(f"missing gate report: {gate_path}", file=sys.stderr)
+        print(f"missing G3 report: {g3_report_path}", file=sys.stderr)
         return 3
     run_dir = workdir / "canonical"
     manifest_path = run_dir / MANIFEST_FILE
@@ -819,7 +743,6 @@ def main(argv: list[str] | None = None) -> int:
 __all__ = [
     "DEFAULT_ASSETS_ROOT",
     "DEFAULT_OUT_ROOT",
-    "MESHER_COMPARISON_SENTENCE",
     "RESOURCE_LIMIT",
     "assets_root",
     "main",

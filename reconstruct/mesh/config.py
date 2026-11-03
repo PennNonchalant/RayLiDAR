@@ -24,12 +24,13 @@ TOP_LEVEL_KEYS = frozenset(
         "route",
         "bundle_root",
         "out_root",
+        "phase2_dir",
         "windows",
         "params",
     }
 )
 
-ROUTES = frozenset({"colmap_openmvs", "open3d_alpha", "openmvs_direct"})
+ROUTES = frozenset({"colmap_openmvs"})
 
 # A key is forbidden when one of these tokens is one of its underscore/dot/dash
 # separated parts (so ``gt_path`` and ``use_alignment`` are caught, while
@@ -49,11 +50,10 @@ FORBIDDEN_KEY_TOKENS = frozenset(
 # Substrings that identify evaluation-only inputs.  No reconstruction input may
 # live under these trees.
 FORBIDDEN_PATH_MARKERS = (
-    "artifacts/02/gt",
-    "artifacts/02/rays",
     "raw/lidar",
     "derived/gt",
 )
+FORBIDDEN_PATH_PATTERN = re.compile(r"artifacts/02[^/]*/(?:gt|rays)")
 
 _KEY_SPLIT = re.compile(r"[_\-.]")
 
@@ -85,6 +85,8 @@ def _reject_forbidden_paths(node: object) -> None:
             _reject_forbidden_paths(value)
     elif isinstance(node, str):
         normalised = node.replace("\\", "/")
+        if FORBIDDEN_PATH_PATTERN.search(normalised):
+            raise ValueError("GT/LiDAR input is not a reconstruction input")
         if any(marker in normalised for marker in FORBIDDEN_PATH_MARKERS):
             raise ValueError("GT/LiDAR input is not a reconstruction input")
 
@@ -107,14 +109,15 @@ def validate_config(cfg: dict) -> dict:
     if not isinstance(cfg, dict):
         raise ValueError("config root must be a mapping")
 
-    _reject_forbidden_keys(cfg)
-    _reject_forbidden_paths(cfg)
+    working = {key: value for key, value in cfg.items() if not key.startswith("_")}
+    _reject_forbidden_keys(working)
+    _reject_forbidden_paths(working)
 
-    unknown = set(cfg) - TOP_LEVEL_KEYS
+    unknown = set(working) - TOP_LEVEL_KEYS
     if unknown:
         raise ValueError(f"unknown top-level config key: {sorted(unknown)[0]}")
 
-    missing = TOP_LEVEL_KEYS - set(cfg)
+    missing = TOP_LEVEL_KEYS - set(working)
     if missing:
         raise ValueError(f"missing top-level config key: {sorted(missing)[0]}")
 
@@ -125,7 +128,7 @@ def validate_config(cfg: dict) -> dict:
     if route not in ROUTES:
         raise ValueError(f"unknown route: {route!r}")
 
-    for key in ("bundle_root", "out_root"):
+    for key in ("bundle_root", "out_root", "phase2_dir"):
         if not isinstance(cfg[key], str) or not cfg[key]:
             raise ValueError(f"config.{key} must be a non-empty path string")
 
@@ -142,12 +145,22 @@ def load_config(path: str | Path) -> dict:
     path = Path(path)
     with path.open("r", encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle)
-    return validate_config(cfg)
+    validated = validate_config(cfg)
+    validated["_source"] = str(path.resolve())
+    return validated
 
 
 def canonical_json(cfg: dict) -> str:
     """Canonical JSON used for hashing (sorted keys, no whitespace)."""
-    return json.dumps(cfg, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    # ``phase2_dir`` locates the read-only GT cache for G3 diagnostics; it is a
+    # local data path, not part of the mesh construction, so it is excluded from
+    # the run hash.
+    payload = {
+        key: value
+        for key, value in cfg.items()
+        if not key.startswith("_") and key != "phase2_dir"
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def config_sha256(cfg: dict) -> str:
