@@ -1,0 +1,55 @@
+schema_version: 1
+run_id: p5-gaussian-60f
+
+paths:
+  bundle: /data-20T/hybrid-lidar-sim/exports/p2-60f-step10-4615-4674
+  colmap_model: /data-20T/hybrid-lidar-sim/artifacts/04/runs/colmap_openmvs-95bcd443929a/full/colmap/sparse_tri
+  artifacts_root: /data-20T/hybrid-lidar-sim/artifacts/05
+  upstream: /data-20T/hybrid-lidar-sim/tools/gaussian/upstream
+  venv: /data-20T/hybrid-lidar-sim/envs/gaussian-venv
+
+# All 60 frames, ascending. No held-out / NVS split: every frame is training.
+frames: [4615, 4616, 4617, 4618, 4619, 4620, 4621, 4622, 4623, 4624, 4625, 4626,
+         4627, 4628, 4629, 4630, 4631, 4632, 4633, 4634, 4635, 4636, 4637, 4638,
+         4639, 4640, 4641, 4642, 4643, 4644, 4645, 4646, 4647, 4648, 4649, 4650,
+         4651, 4652, 4653, 4654, 4655, 4656, 4657, 4658, 4659, 4660, 4661, 4662,
+         4663, 4664, 4665, 4666, 4667, 4668, 4669, 4670, 4671, 4672, 4673, 4674]
+
+camera: image_00
+resolution: [1408, 376]
+seed: 20261102
+
+method:
+  gs3d:
+    upstream_subdir: gaussian-splatting
+    iterations: 30000
+    resolution: -1
+    smoke_iterations: 100
+    smoke_frames: [4615, 4616]
+    render: {rgb: png, depth: npy, alpha: npy}
+  gs2d:
+    upstream_subdir: 2d-gaussian-splatting
+    iterations: 30000
+    resolution: -1
+    depth_ratio: 0.0
+    smoke_iterations: 100
+    smoke_frames: [4615, 4616]
+    render: {rgb: png, depth: npy, alpha: npy}
+
+protocol:
+  alpha_threshold: 0.5
+  depth_convention: z_depth
+  pixel_rounding: half_up
+  depth_probe_frame: 4615
+  depth_probe_stride: 97
+  primary_camera: 0
+  report_all_frames: true
+
+eval:
+  protocol_config: reconstruct/configs/eval.yaml
+  protocol_doc: reconstruct/configs/eval_protocol.md
+  modes: [all, unoccluded]
+
+report:
+  title: "3DGS vs 2DGS on KITTI-360 frames 4615–4674"
+  labels: [training-view, not-NVS, rendered-depth-proxy, single-seed]

@@ -1,8 +1,9 @@
-# A/B route: alpha-shape meshing of the shared COLMAP dense fused cloud.
-# This is a mesher comparison, not an independent MVS pipeline (D-04).
+# Canonical reconstruction route: known-pose COLMAP model -> OpenMVS chain.
+# Route and window selection live here only; changing them never changes code.
 schema_version: 1
-route: open3d_alpha
+route: colmap_openmvs
 bundle_root: /data-20T/hybrid-lidar-sim/exports/p2-60f-step10-4615-4674
+phase2_dir: /data-20T/hybrid-lidar-sim/artifacts/02
 out_root: /data-20T/hybrid-lidar-sim/artifacts/04
 windows:
   smoke: [4615, 4616, 4617, 4618, 4619, 4620, 4621, 4622, 4623, 4624]
@@ -22,11 +23,10 @@ params:
     geom_consistency: true
     depth_min: 1.0
     depth_max: 80.0
-  open3d:
-    voxel_smoke: 0.10
-    voxel_full: 0.05
-    alpha_factor: 4.0
-    normal_k: 30
-    envelope_xy_m: 60.0
-    envelope_z_m: [-10.0, 30.0]
-  dense_backend: auto
+  openmvs:
+    remove_spurious: 4
+    close_holes: 30
+    smooth: 2
+    refine_scales: 1
+    max_face_area: 16
+  dense_backend: auto # auto -> colmap_cuda if the probe finds CUDA, else checkpoint

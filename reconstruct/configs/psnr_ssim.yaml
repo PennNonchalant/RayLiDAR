@@ -1,0 +1,13 @@
+schema_version: 1
+alpha_threshold: 0.5
+depth_convention: z_depth
+pixel_rounding: half_up
+primary_camera: 0
+resolution: [1408, 376]
+psnr_ssim:
+  data_range: 255
+  channel_axis: 2
+  gaussian_weights: true
+  sigma: 1.5
+  use_sample_covariance: false
+  label: "training-view reconstruction metric (not NVS)"

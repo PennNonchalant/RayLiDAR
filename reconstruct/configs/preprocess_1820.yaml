@@ -1,0 +1,81 @@
+# Preprocessing configuration for the 1820-1879 test segment.
+#
+# This file is the single source of truth for every preprocessing threshold and for
+# the selected window. Duplicate it (or point --config at another file) to run
+# the same pipeline on a different segment.
+schema_version: 1
+phase: 2
+sequence: 2013_05_28_drive_0000_sync
+dataset_root: /data-20T/hybrid-lidar-sim/raw/kitti360
+lidar_root: /data-20T/kitti/data_3d_raw/2013_05_28_drive_0000_sync/velodyne_points
+bboxes_xml: /data-20T/kitti/data_3d_bboxes/train/2013_05_28_drive_0000_sync.xml
+cameras: [image_00, image_01]
+frames: [1820, 1821, 1822, 1823, 1824, 1825, 1826, 1827, 1828, 1829, 1830, 1831,
+         1832, 1833, 1834, 1835, 1836, 1837, 1838, 1839, 1840, 1841, 1842, 1843,
+         1844, 1845, 1846, 1847, 1848, 1849, 1850, 1851, 1852, 1853, 1854, 1855,
+         1856, 1857, 1858, 1859, 1860, 1861, 1862, 1863, 1864, 1865, 1866, 1867,
+         1868, 1869, 1870, 1871, 1872, 1873, 1874, 1875, 1876, 1877, 1878, 1879]
+artifacts:
+  phase_dir: /data-20T/hybrid-lidar-sim/artifacts/02-1820
+  bundle_dir: /data-20T/hybrid-lidar-sim/exports/mesh-60f-1820-1879
+streams:
+  require_exact_pose: true
+  require_next_pose: true
+  require_semantics: true
+  max_image_pixels: 50000000
+selection:
+  window_frames: 60
+  step_frames: 10
+  min_usable_frames: 60
+  min_scene_points_per_frame: 20000
+  score: micro_dynamic_fraction_after_ego
+  tie_break: earliest_window
+uncurl:
+  azimuth_convention: 0.5_plus_atan2_over_2pi
+  interval: current_to_next_timestamp
+  max_next_pose_delta_frames: 0
+  azimuth_bins_deg: 5
+  match_voxel_m: 0.2
+  max_match_distance_m: 0.3
+  max_abs_bin_mean_m: 0.05
+  max_sinusoid_amplitude_m: 0.03
+  require_ablation_reported: true
+mask:
+  dynamic_classes: [car, truck, bus, motorcycle, bicycle, person, rider]
+  dynamic_label_ids: [26, 27, 28, 32, 33, 24, 25]
+  bbox_dynamic_label_map: {pedestrian: person}
+  ego_roi_velodyne_m:
+    x: [-2.5, 2.5]
+    y: [-1.2, 1.2]
+    z: [-2.0, 0.3]
+  bbox_max_time_gap_frames: 2
+  residual_dynamic_radius_m: 1.0
+gt_cache:
+  endianness: little
+  record_size: 32
+  min_points_per_frame: 20000
+  expected_points_range: [50000, 150000]
+  camera_unknown: 255
+  class_unknown: 65535
+rays:
+  t_min_m: 1.0e-4
+  r_min_m: 1.5
+  r_max_m: 60.0
+  image_margin_px: 5
+  camera_assignment: most_central_normalized_radius
+  camera_tie_break: lower_camera_id
+  buckets_primary: [[0.0, 20.0], [20.0, 40.0], [40.0, 50.0]]
+  buckets_secondary: [[50.0, 60.0]]
+  bucket_edge_rule: closed_right_for_40_50_and_50_60
+  occlusion:
+    neighbor_px: 3
+    sigma_lidar_m: 0.02
+    sigma_multiple: 3.0
+    depth_threshold_m: 0.06
+    variants: [occluded_excluded, full]
+  record_size: 64
+g2:
+  require_image_00_and_01: true
+  min_valid_rays_per_frame: 20000
+  waterfall_exact: true
+  require_hash_mutation_test: true
