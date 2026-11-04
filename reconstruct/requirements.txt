@@ -1,4 +1,0 @@
-open3d==0.20.0
-numpy>=2,<3
-trimesh>=4,<5
-PyYAML>=6,<7

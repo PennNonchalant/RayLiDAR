@@ -1,0 +1,36 @@
+# Canonical Phase-4 route: known-pose COLMAP model -> OpenMVS chain.
+# Route and window selection live here only; changing them never changes code.
+schema_version: 1
+route: colmap_openmvs
+bundle_root: /data-20T/hybrid-lidar-sim/exports/mesh-60f-7426-7485
+phase2_dir: /data-20T/hybrid-lidar-sim/artifacts/02-7426
+out_root: /data-20T/hybrid-lidar-sim/artifacts/06-multiseg
+windows:
+  smoke: [7426, 7427, 7428, 7429, 7430, 7431, 7432, 7433, 7434, 7435]
+  full: [7426, 7427, 7428, 7429, 7430, 7431, 7432, 7433, 7434, 7435, 7436, 7437,
+         7438, 7439, 7440, 7441, 7442, 7443, 7444, 7445, 7446, 7447, 7448, 7449,
+         7450, 7451, 7452, 7453, 7454, 7455, 7456, 7457, 7458, 7459, 7460, 7461,
+         7462, 7463, 7464, 7465, 7466, 7467, 7468, 7469, 7470, 7471, 7472, 7473,
+         7474, 7475, 7476, 7477, 7478, 7479, 7480, 7481, 7482, 7483, 7484, 7485]
+params:
+  image_camera: image_00
+  threads: 8
+  cleanup:
+    min_component_triangles: 10
+  viewer:
+    max_triangles: 1000000
+  colmap:
+    camera_model: PINHOLE
+    single_camera: 0
+    feature_use_gpu: 0
+    matching_use_gpu: 0
+    geom_consistency: true
+    depth_min: 1.0
+    depth_max: 80.0
+  openmvs:
+    remove_spurious: 4
+    close_holes: 30
+    smooth: 2
+    refine_scales: 1
+    max_face_area: 16
+  dense_backend: auto # auto -> colmap_cuda if the probe finds CUDA, else checkpoint

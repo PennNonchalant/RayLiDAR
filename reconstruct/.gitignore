@@ -1,2 +1,6 @@
 __pycache__/
 *.py[cod]
+.pytest_cache/
+
+# Local-only end-to-end test scripts and outputs (never committed).
+test/
