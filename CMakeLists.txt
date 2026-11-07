@@ -41,6 +41,14 @@ target_link_libraries(raylidar_lidar_test PRIVATE
     raylidar_simulation
 )
 
+add_executable(raylidar_api_test
+    apps/api_test/main.cpp
+)
+
+target_link_libraries(raylidar_api_test PRIVATE
+    raylidar::raylidar
+)
+
 add_executable(raylidar_kitti_eval
     apps/kitti_eval/main.cpp
 )
@@ -50,7 +58,7 @@ target_link_libraries(raylidar_kitti_eval PRIVATE
 )
 
 foreach(target IN ITEMS raylidar_vulkan raylidar_rt raylidar_simulation raylidar raylidar_cli raylidar_smoke
-                        raylidar_lidar_test raylidar_kitti_eval)
+                        raylidar_lidar_test raylidar_kitti_eval raylidar_api_test)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc /utf-8)
     else()
@@ -64,6 +72,7 @@ raylidar_add_shaders(raylidar_shaders "${SHADER_SOURCE_DIR}" "${SHADER_BINARY_DI
 add_dependencies(raylidar_smoke raylidar_shaders)
 add_dependencies(raylidar_lidar_test raylidar_shaders)
 add_dependencies(raylidar_kitti_eval raylidar_shaders)
+add_dependencies(raylidar_api_test raylidar_shaders)
 
 add_test(
     NAME vulkan_context_smoke
@@ -90,6 +99,17 @@ add_test(
 )
 
 set_tests_properties(lidar_wall PROPERTIES
+    TIMEOUT 30
+    LABELS "gpu;vulkan"
+    FAIL_REGULAR_EXPRESSION "\\[Vulkan\\]\\[error\\]"
+)
+
+add_test(
+    NAME api_wall
+    COMMAND raylidar_api_test "${SHADER_BINARY_DIR}/LidarTrace.spv"
+)
+
+set_tests_properties(api_wall PROPERTIES
     TIMEOUT 30
     LABELS "gpu;vulkan"
     FAIL_REGULAR_EXPRESSION "\\[Vulkan\\]\\[error\\]"
