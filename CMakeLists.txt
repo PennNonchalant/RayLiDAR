@@ -32,7 +32,16 @@ target_link_libraries(raylidar_smoke PRIVATE
     raylidar_rt
 )
 
-foreach(target IN ITEMS raylidar_vulkan raylidar_rt raylidar raylidar_cli raylidar_smoke)
+add_executable(raylidar_lidar_test
+    apps/lidar_test/main.cpp
+)
+
+target_link_libraries(raylidar_lidar_test PRIVATE
+    raylidar_simulation
+)
+
+foreach(target IN ITEMS raylidar_vulkan raylidar_rt raylidar_simulation raylidar raylidar_cli raylidar_smoke
+                        raylidar_lidar_test)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc /utf-8)
     else()
@@ -44,6 +53,7 @@ set(SHADER_SOURCE_DIR "${PROJECT_SOURCE_DIR}/shaders")
 set(SHADER_BINARY_DIR "${PROJECT_BINARY_DIR}/shaders")
 raylidar_add_shaders(raylidar_shaders "${SHADER_SOURCE_DIR}" "${SHADER_BINARY_DIR}")
 add_dependencies(raylidar_smoke raylidar_shaders)
+add_dependencies(raylidar_lidar_test raylidar_shaders)
 
 add_test(
     NAME vulkan_context_smoke
@@ -53,6 +63,23 @@ add_test(
 )
 
 set_tests_properties(vulkan_context_smoke PROPERTIES
+    TIMEOUT 30
+    LABELS "gpu;vulkan"
+    FAIL_REGULAR_EXPRESSION "\\[Vulkan\\]\\[error\\]"
+)
+
+add_test(NAME lidar_sensor COMMAND raylidar_lidar_test sensor)
+
+set_tests_properties(lidar_sensor PROPERTIES
+    TIMEOUT 30
+)
+
+add_test(
+    NAME lidar_wall
+    COMMAND raylidar_lidar_test wall "${SHADER_BINARY_DIR}/LidarTrace.spv"
+)
+
+set_tests_properties(lidar_wall PROPERTIES
     TIMEOUT 30
     LABELS "gpu;vulkan"
     FAIL_REGULAR_EXPRESSION "\\[Vulkan\\]\\[error\\]"

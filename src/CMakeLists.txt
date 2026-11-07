@@ -3,6 +3,7 @@ add_library(raylidar::raylidar ALIAS raylidar)
 
 add_subdirectory(vulkan)
 add_subdirectory(rt)
+add_subdirectory(simulation)
 
 target_sources(raylidar PRIVATE
     version.cpp
