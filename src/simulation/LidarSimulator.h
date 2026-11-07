@@ -21,6 +21,17 @@ class AccelerationStructure;
 
 namespace raylidar::simulation
 {
+// Per-stage cost of one Scan() call, in milliseconds.
+struct ScanTimings
+{
+    double Upload = 0.0;     // CPU: copy rays into the upload buffer
+    double Trace = 0.0;      // GPU: ray query dispatch (timestamps)
+    double CopyHits = 0.0;   // GPU: hit buffer -> readback buffer (timestamps)
+    double SubmitWait = 0.0; // CPU: record, submit and wait for the GPU
+    double Readback = 0.0;   // CPU: read hits and build points
+    double Total = 0.0;      // CPU: the whole Scan() call
+};
+
 struct ScanResult
 {
     // One hit per input ray, in input order.
@@ -29,8 +40,7 @@ struct ScanResult
     // World-space points of valid hits only.
     std::vector<std::array<float, 3>> Points;
 
-    // GPU time of the trace dispatch only (excludes upload and readback).
-    double TraceMilliseconds = 0.0;
+    ScanTimings Timings;
 };
 
 class LidarSimulator

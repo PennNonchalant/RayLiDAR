@@ -28,6 +28,22 @@ namespace sim = raylidar::simulation;
 
 constexpr float kEvaluationRangeMin = 1.5f;
 
+using Clock = std::chrono::steady_clock;
+
+void PrintTimings(const sim::ScanTimings &timings, double generate, std::size_t rayCount)
+{
+    const double total = generate + timings.Total;
+
+    std::cout << "  Ray generation (CPU):   " << generate << " ms\n"
+              << "  Upload rays (CPU):      " << timings.Upload << " ms\n"
+              << "  Submit + wait (CPU):    " << timings.SubmitWait << " ms\n"
+              << "    Trace (GPU):          " << timings.Trace << " ms\n"
+              << "    Copy hits (GPU):      " << timings.CopyHits << " ms\n"
+              << "  Readback + points (CPU):" << timings.Readback << " ms\n"
+              << "  End-to-end:             " << total << " ms (" << 1000.0 / total << " scans/s, "
+              << static_cast<double>(rayCount) / (total * 1.0e3) << " Mrays/s)\n";
+}
+
 std::vector<std::array<float, 3>> ToWorld(std::span<const std::array<float, 3>> local,
                                           const std::array<double, 3> &origin)
 {
@@ -100,12 +116,12 @@ void EvaluateGtRays(sim::LidarSimulator &simulator, const raylidar::rt::MeshScen
     }
 
     const double hitCount = std::max<double>(1.0, static_cast<double>(hits));
-    const double raysPerSecond = static_cast<double>(gt.Rays.size()) / (result.TraceMilliseconds * 1.0e-3);
+    const double raysPerSecond = static_cast<double>(gt.Rays.size()) / (result.Timings.Trace * 1.0e-3);
 
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "\n=== GT camera rays vs mesh ===\n"
               << "Rays traced:        " << gt.Rays.size() << '\n'
-              << "Trace time:         " << result.TraceMilliseconds << " ms (" << raysPerSecond / 1.0e6 << " Mrays/s)\n"
+              << "Trace time:         " << result.Timings.Trace << " ms (" << raysPerSecond / 1.0e6 << " Mrays/s)\n"
               << "Evaluated (t>=1.5): " << considered << '\n'
               << "Hit rate:           " << 100.0 * static_cast<double>(hits) / static_cast<double>(considered) << " %\n"
               << "Mean error:         " << signedSum / hitCount << " m (signed)\n"
@@ -113,7 +129,10 @@ void EvaluateGtRays(sim::LidarSimulator &simulator, const raylidar::rt::MeshScen
               << "P90 |error|:        " << Percentile(absoluteErrors, 0.9) << " m\n"
               << "RMSE:               " << std::sqrt(squaredSum / hitCount) << " m\n"
               << "|error| <= 0.1 m:   " << 100.0 * static_cast<double>(within10cm) / hitCount << " %\n"
-              << "|error| <= 0.5 m:   " << 100.0 * static_cast<double>(within50cm) / hitCount << " %\n";
+              << "|error| <= 0.5 m:   " << 100.0 * static_cast<double>(within50cm) / hitCount << " %\n"
+              << "Per-stage cost (rays loaded from disk, no generation):\n";
+
+    PrintTimings(result.Timings, 0.0, gt.Rays.size());
 
     if (outputDirectory.empty())
     {
@@ -151,24 +170,27 @@ void EvaluateGtRays(sim::LidarSimulator &simulator, const raylidar::rt::MeshScen
     sim::WritePointCloudPly(outputDirectory / ("gt_" + frameName + "_simulated.ply"), ToWorld(simulated, origin));
 }
 
-// Simulates a full HDL-64E sweep from the real Velodyne pose of every frame.
+// Simulates a full HDL-64E sweep from the real Velodyne pose of every frame and reports the per-stage cost.
+// The first frame is excluded from the averages because it pays one-time warm-up costs.
 void RunVelodyneScans(sim::LidarSimulator &simulator, const raylidar::rt::MeshScene &scene,
                       const std::vector<sim::VelodynePose> &poses, const std::array<double, 3> &origin,
                       const std::filesystem::path &outputDirectory)
 {
     const sim::LidarSensor sensor(sim::LidarSensorDescription{});
 
-    double totalMilliseconds = 0.0;
-    double minimumMilliseconds = 1.0e30;
+    sim::ScanTimings sum;
+    double generateSum = 0.0;
+    double bestTrace = 1.0e30;
     std::size_t totalHits = 0;
+    std::size_t measuredFrames = 0;
 
     for (std::size_t index = 0; index < poses.size(); ++index)
     {
+        const auto generateStart = Clock::now();
         const auto rays = sensor.GenerateRays(sim::ToLocalTransform(poses[index].WorldFromVelodyne, origin));
-        const auto result = simulator.Scan(scene.Tlas(), rays);
+        const double generate = std::chrono::duration<double, std::milli>(Clock::now() - generateStart).count();
 
-        totalMilliseconds += result.TraceMilliseconds;
-        minimumMilliseconds = std::min(minimumMilliseconds, result.TraceMilliseconds);
+        const auto result = simulator.Scan(scene.Tlas(), rays);
         totalHits += result.Points.size();
 
         if (index == 0 && !outputDirectory.empty())
@@ -176,22 +198,46 @@ void RunVelodyneScans(sim::LidarSimulator &simulator, const raylidar::rt::MeshSc
             sim::WritePointCloudPly(outputDirectory / ("velodyne_" + std::to_string(poses[index].Frame) + ".ply"),
                                     ToWorld(result.Points, origin));
         }
+
+        if (index == 0 && poses.size() > 1)
+        {
+            continue;
+        }
+
+        ++measuredFrames;
+        generateSum += generate;
+        sum.Upload += result.Timings.Upload;
+        sum.Trace += result.Timings.Trace;
+        sum.CopyHits += result.Timings.CopyHits;
+        sum.SubmitWait += result.Timings.SubmitWait;
+        sum.Readback += result.Timings.Readback;
+        sum.Total += result.Timings.Total;
+        bestTrace = std::min(bestTrace, result.Timings.Trace);
     }
 
-    const double frameCount = static_cast<double>(poses.size());
+    const double frames = static_cast<double>(measuredFrames);
+
+    sim::ScanTimings average;
+    average.Upload = sum.Upload / frames;
+    average.Trace = sum.Trace / frames;
+    average.CopyHits = sum.CopyHits / frames;
+    average.SubmitWait = sum.SubmitWait / frames;
+    average.Readback = sum.Readback / frames;
+    average.Total = sum.Total / frames;
 
     std::cout << "\n=== HDL-64E scans from T_W_V ===\n"
               << "Frames:             " << poses.size() << " x " << sensor.RayCount() << " rays\n"
-              << "Average trace time: " << totalMilliseconds / frameCount << " ms/frame\n"
-              << "Best trace time:    " << minimumMilliseconds << " ms/frame\n"
-              << "Average hits:       " << static_cast<double>(totalHits) / frameCount << " points/frame\n";
+              << "Average hits:       " << static_cast<double>(totalHits) / static_cast<double>(poses.size())
+              << " points/frame\n"
+              << "Best trace time:    " << bestTrace << " ms/frame\n"
+              << "Average per frame (" << measuredFrames << " frames, first frame excluded):\n";
+
+    PrintTimings(average, generateSum / frames, sensor.RayCount());
 }
 
 void Run(const std::filesystem::path &shaderPath, const std::filesystem::path &bundle,
          const std::filesystem::path &outputDirectory)
 {
-    using Clock = std::chrono::steady_clock;
-
     if (!outputDirectory.empty())
     {
         std::filesystem::create_directories(outputDirectory);

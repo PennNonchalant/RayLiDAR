@@ -138,7 +138,7 @@ void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem:
     Check(expectedHits > 0, "Wall test produced no hits.");
 
     std::cout << "LiDAR wall test passed: " << result.Points.size() << " / " << rays.size() << " rays hit, trace "
-              << result.TraceMilliseconds << " ms.\n";
+              << result.Timings.Trace << " ms.\n";
 
     if (!plyPath.empty())
     {
