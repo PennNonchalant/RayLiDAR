@@ -2,6 +2,7 @@ add_library(raylidar SHARED)
 add_library(raylidar::raylidar ALIAS raylidar)
 
 add_subdirectory(vulkan)
+add_subdirectory(rt)
 
 target_sources(raylidar PRIVATE
     version.cpp
@@ -9,6 +10,7 @@ target_sources(raylidar PRIVATE
 
 target_link_libraries(raylidar PRIVATE
     raylidar_vulkan
+    raylidar_rt
 )
 
 target_compile_features(raylidar PUBLIC cxx_std_20)
