@@ -16,6 +16,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
 
 find_package(VulkanHeaders 1.4 CONFIG REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 enable_testing()
 add_subdirectory(src)
@@ -40,8 +41,16 @@ target_link_libraries(raylidar_lidar_test PRIVATE
     raylidar_simulation
 )
 
+add_executable(raylidar_kitti_eval
+    apps/kitti_eval/main.cpp
+)
+
+target_link_libraries(raylidar_kitti_eval PRIVATE
+    raylidar_simulation
+)
+
 foreach(target IN ITEMS raylidar_vulkan raylidar_rt raylidar_simulation raylidar raylidar_cli raylidar_smoke
-                        raylidar_lidar_test)
+                        raylidar_lidar_test raylidar_kitti_eval)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /EHsc /utf-8)
     else()
@@ -54,6 +63,7 @@ set(SHADER_BINARY_DIR "${PROJECT_BINARY_DIR}/shaders")
 raylidar_add_shaders(raylidar_shaders "${SHADER_SOURCE_DIR}" "${SHADER_BINARY_DIR}")
 add_dependencies(raylidar_smoke raylidar_shaders)
 add_dependencies(raylidar_lidar_test raylidar_shaders)
+add_dependencies(raylidar_kitti_eval raylidar_shaders)
 
 add_test(
     NAME vulkan_context_smoke

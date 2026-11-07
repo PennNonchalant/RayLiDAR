@@ -1,6 +1,8 @@
 add_library(raylidar_simulation STATIC
+    KittiBundle.cpp
     LidarSensor.cpp
     LidarSimulator.cpp
+    MeshIO.cpp
     PointCloudIO.cpp
 )
 
@@ -10,8 +12,11 @@ target_include_directories(raylidar_simulation PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>"
 )
 
-target_link_libraries(raylidar_simulation PUBLIC
-    raylidar_rt
+target_link_libraries(raylidar_simulation
+    PUBLIC
+        raylidar_rt
+    PRIVATE
+        nlohmann_json::nlohmann_json
 )
 
 set_target_properties(raylidar_simulation PROPERTIES
