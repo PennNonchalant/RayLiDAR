@@ -16,7 +16,7 @@
 
 namespace raylidar::rt
 {
-class AccelerationStructure;
+class MeshScene;
 } // namespace raylidar::rt
 
 namespace raylidar::simulation
@@ -58,7 +58,7 @@ class LidarSimulator
     ~LidarSimulator() = default;
 
     [[nodiscard]]
-    ScanResult Scan(const rt::AccelerationStructure &tlas, std::span<const rt::Ray> rays);
+    ScanResult Scan(const rt::MeshScene &scene, std::span<const rt::Ray> rays);
 
   private:
     const vulkan::VulkanContext &m_context;

@@ -91,7 +91,7 @@ ScanOutput Simulator::Scan(const Pose &worldFromSensor)
     const auto rays = m_impl->Sensor.GenerateRays(simulation::ToLocalTransform(worldFromSensor, m_impl->Origin));
     const double generate = std::chrono::duration<double, std::milli>(Clock::now() - generateStart).count();
 
-    const auto result = m_impl->Lidar->Scan(m_impl->Scene->Tlas(), rays);
+    const auto result = m_impl->Lidar->Scan(*m_impl->Scene, rays);
     const auto &origin = m_impl->Origin;
 
     ScanOutput output;

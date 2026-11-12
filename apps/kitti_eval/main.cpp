@@ -78,7 +78,7 @@ float Percentile(std::vector<float> values, double fraction)
 void EvaluateGtRays(sim::LidarSimulator &simulator, const raylidar::rt::MeshScene &scene, const sim::GtRays &gt,
                     const std::array<double, 3> &origin, const std::filesystem::path &outputDirectory)
 {
-    const auto result = simulator.Scan(scene.Tlas(), gt.Rays);
+    const auto result = simulator.Scan(scene, gt.Rays);
 
     std::size_t considered = 0;
     std::size_t hits = 0;
@@ -190,7 +190,7 @@ void RunVelodyneScans(sim::LidarSimulator &simulator, const raylidar::rt::MeshSc
         const auto rays = sensor.GenerateRays(sim::ToLocalTransform(poses[index].WorldFromVelodyne, origin));
         const double generate = std::chrono::duration<double, std::milli>(Clock::now() - generateStart).count();
 
-        const auto result = simulator.Scan(scene.Tlas(), rays);
+        const auto result = simulator.Scan(scene, rays);
         totalHits += result.Points.size();
 
         if (index == 0 && !outputDirectory.empty())

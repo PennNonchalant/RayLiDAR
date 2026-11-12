@@ -98,7 +98,7 @@ void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem:
     const auto rays = sensor.GenerateRays(sim::kIdentityTransform);
 
     sim::LidarSimulator simulator(context, shaderPath, sensor.RayCount());
-    const auto result = simulator.Scan(scene.Tlas(), rays);
+    const auto result = simulator.Scan(scene, rays);
 
     std::size_t expectedHits = 0;
 

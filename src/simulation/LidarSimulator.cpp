@@ -1,6 +1,5 @@
 #include "LidarSimulator.h"
 
-#include "rt/AccelerationStructure.h"
 #include "vulkan/Synchronization.h"
 #include "vulkan/VulkanContext.h"
 
@@ -55,7 +54,7 @@ LidarSimulator::LidarSimulator(const vulkan::VulkanContext &context, const std::
     m_timestampPool = vk::raii::QueryPool(context.Device(), queryPoolInfo);
 }
 
-ScanResult LidarSimulator::Scan(const rt::AccelerationStructure &tlas, std::span<const rt::Ray> rays)
+ScanResult LidarSimulator::Scan(const rt::MeshScene &scene, std::span<const rt::Ray> rays)
 {
     if (rays.size() > m_maxRayCount)
     {
@@ -79,14 +78,14 @@ ScanResult LidarSimulator::Scan(const rt::AccelerationStructure &tlas, std::span
     result.Timings.Upload = MillisecondsSince(uploadStart);
 
     const auto submitStart = Clock::now();
-    m_tracer.SetResources(tlas, m_rayBuffer, m_hitBuffer);
+    m_tracer.SetResources(scene, m_rayBuffer, m_hitBuffer);
 
     const auto &commandBuffer = m_commands.Begin();
 
     commandBuffer.resetQueryPool(*m_timestampPool, 0, kTimestampCount);
     commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *m_timestampPool, 0);
 
-    rt::TraceParameters parameters;
+    rt::MeshTraceParameters parameters;
     parameters.RayCount = rayCount;
     m_tracer.RecordTrace(commandBuffer, parameters);
 
