@@ -47,4 +47,4 @@ std::vector<std::array<float, 3>> ToLocalFloat(std::span<const std::array<double
 
     return local;
 }
-}
+} // namespace raylidar::simulation

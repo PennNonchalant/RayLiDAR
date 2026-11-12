@@ -13,7 +13,11 @@
 #include <string_view>
 #include <utility>
 
-struct raylidar::simulation::PlyIO::PlyHeader
+namespace raylidar::simulation
+{
+namespace
+{
+struct PlyHeader
 {
     struct Property
     {
@@ -96,7 +100,7 @@ static double LoadAsDouble(const std::string &type, const char *data)
     return Load<double>(data);
 }
 
-class raylidar::simulation::PlyIO::Cursor
+class Cursor
 {
   public:
     explicit Cursor(const std::vector<char> &bytes) : m_bytes(bytes)
@@ -119,8 +123,7 @@ class raylidar::simulation::PlyIO::Cursor
     std::size_t m_offset = 0;
 };
 
-raylidar::simulation::PlyIO::PlyHeader raylidar::simulation::PlyIO::ReadPlyHeader(std::istream &file,
-                                                                                  const std::filesystem::path &path)
+PlyHeader ReadPlyHeader(std::istream &file, const std::filesystem::path &path)
 {
     PlyHeader header;
     std::string line;
@@ -175,8 +178,9 @@ raylidar::simulation::PlyIO::PlyHeader raylidar::simulation::PlyIO::ReadPlyHeade
 
     throw std::runtime_error("PLY header is missing end_header: " + path.string());
 }
+} // namespace
 
-raylidar::simulation::MeshData raylidar::simulation::PlyIO::LoadMesh(const std::filesystem::path &path)
+MeshData PlyIO::LoadMesh(const std::filesystem::path &path)
 {
     std::ifstream file(path, std::ios::binary);
     if (!file)
@@ -272,8 +276,89 @@ raylidar::simulation::MeshData raylidar::simulation::PlyIO::LoadMesh(const std::
     return mesh;
 }
 
-void raylidar::simulation::PlyIO::WritePointCloud(const std::filesystem::path &path,
-                                                  std::span<const std::array<float, 3>> points)
+std::vector<rt::Gaussian> PlyIO::LoadGaussians(const std::filesystem::path &path, const std::array<double, 3> &origin)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+    {
+        throw std::runtime_error("Failed to open Gaussian PLY: " + path.string());
+    }
+
+    const auto header = ReadPlyHeader(file, path);
+    if (!header.HasSignature || header.Version != "1.0" || header.Elements.size() != 1 ||
+        header.Elements.front().Name != "vertex")
+    {
+        throw std::runtime_error("Expected a 2D Gaussian PLY with one vertex element: " + path.string());
+    }
+
+    const auto &vertex = header.Elements.front();
+    for (const auto &property : vertex.Properties)
+    {
+        if (property.IsList || property.Type != "float" || property.Name == "scale_2")
+        {
+            throw std::runtime_error("Unsupported 2D Gaussian PLY property " + property.Name + ": " + path.string());
+        }
+    }
+
+    const auto propertyIndex = [&vertex, &path](std::string_view name) {
+        const auto found = std::find_if(vertex.Properties.begin(), vertex.Properties.end(),
+                                        [name](const auto &property) { return property.Name == name; });
+        if (found == vertex.Properties.end())
+        {
+            throw std::runtime_error("Missing Gaussian PLY property " + std::string(name) + ": " + path.string());
+        }
+        return static_cast<std::size_t>(found - vertex.Properties.begin());
+    };
+
+    const std::array positionIndices{propertyIndex("x"), propertyIndex("y"), propertyIndex("z")};
+    const auto opacityIndex = propertyIndex("opacity");
+    const auto scaleUIndex = propertyIndex("scale_0");
+    const auto scaleVIndex = propertyIndex("scale_1");
+    const auto [wIndex, xIndex, yIndex, zIndex] =
+        std::array{propertyIndex("rot_0"), propertyIndex("rot_1"), propertyIndex("rot_2"), propertyIndex("rot_3")};
+
+    std::vector<float> record(vertex.Properties.size());
+    const auto recordSize = static_cast<std::streamsize>(record.size() * sizeof(float));
+
+    std::vector<rt::Gaussian> gaussians;
+    gaussians.reserve(vertex.Count);
+    for (std::size_t vertexIndex = 0; vertexIndex < vertex.Count; ++vertexIndex)
+    {
+        if (!file.read(reinterpret_cast<char *>(record.data()), recordSize))
+        {
+            throw std::runtime_error("Failed to read Gaussian PLY vertex data: " + path.string());
+        }
+
+        rt::Gaussian gaussian;
+        for (std::size_t axis = 0; axis < gaussian.Center.size(); ++axis)
+        {
+            const double worldPosition = record[positionIndices[axis]];
+            gaussian.Center[axis] = static_cast<float>(worldPosition - origin[axis]);
+        }
+
+        gaussian.Opacity = 1.0f / (1.0f + std::exp(-record[opacityIndex]));
+        gaussian.SigmaU = std::exp(record[scaleUIndex]);
+        gaussian.SigmaV = std::exp(record[scaleVIndex]);
+
+        const double rawW = record[wIndex];
+        const double rawX = record[xIndex];
+        const double rawY = record[yIndex];
+        const double rawZ = record[zIndex];
+        const double inverseNorm = 1.0 / std::sqrt(rawW * rawW + rawX * rawX + rawY * rawY + rawZ * rawZ);
+        const auto w = static_cast<float>(rawW * inverseNorm);
+        const auto x = static_cast<float>(rawX * inverseNorm);
+        const auto y = static_cast<float>(rawY * inverseNorm);
+        const auto z = static_cast<float>(rawZ * inverseNorm);
+
+        gaussian.AxisU = {1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + w * z), 2.0f * (x * z - w * y)};
+        gaussian.AxisV = {2.0f * (x * y - w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z + w * x)};
+        gaussians.push_back(gaussian);
+    }
+
+    return gaussians;
+}
+
+void PlyIO::WritePointCloud(const std::filesystem::path &path, std::span<const std::array<float, 3>> points)
 {
     static_assert(std::endian::native == std::endian::little, "PLY writer assumes a little-endian host.");
 
@@ -300,3 +385,4 @@ void raylidar::simulation::PlyIO::WritePointCloud(const std::filesystem::path &p
         throw std::runtime_error("Failed to write PLY file: " + path.string());
     }
 }
+} // namespace raylidar::simulation
