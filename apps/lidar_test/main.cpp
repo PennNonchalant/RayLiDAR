@@ -2,7 +2,7 @@
 #include "rt/MeshScene.h"
 #include "simulation/LidarSensor.h"
 #include "simulation/LidarSimulator.h"
-#include "simulation/PointCloudIO.h"
+#include "simulation/PlyIO.h"
 #include "vulkan/CommandContext.h"
 #include "vulkan/VulkanContext.h"
 
@@ -142,7 +142,7 @@ void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem:
 
     if (!plyPath.empty())
     {
-        sim::WritePointCloudPly(plyPath, result.Points);
+        sim::PlyIO::WritePointCloud(plyPath, result.Points);
         std::cout << "Wrote " << plyPath.string() << '\n';
     }
 }
