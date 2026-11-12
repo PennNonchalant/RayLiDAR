@@ -1,35 +1,41 @@
-#include "MeshIO.h"
+#include "PlyIO.h"
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <fstream>
 #include <iterator>
-#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
-namespace raylidar::simulation
+struct raylidar::simulation::PlyIO::PlyHeader
 {
-namespace
-{
-struct PlyProperty
-{
-    std::string Name;
-    std::string Type;
-    bool IsList = false;
-    std::string CountType;
+    struct Property
+    {
+        std::string Name;
+        std::string Type;
+        bool IsList = false;
+        std::string CountType;
+    };
+
+    struct Element
+    {
+        std::string Name;
+        std::size_t Count = 0;
+        std::vector<Property> Properties;
+    };
+
+    bool HasSignature = false;
+    std::string Version;
+    std::vector<Element> Elements;
 };
 
-struct PlyElement
-{
-    std::string Name;
-    std::size_t Count = 0;
-    std::vector<PlyProperty> Properties;
-};
-
-std::size_t TypeSize(const std::string &type)
+static std::size_t TypeSize(const std::string &type)
 {
     if (type == "char" || type == "uchar" || type == "int8" || type == "uint8")
     {
@@ -50,14 +56,14 @@ std::size_t TypeSize(const std::string &type)
     throw std::runtime_error("Unsupported PLY property type: " + type);
 }
 
-template <typename T> T Load(const char *data)
+template <typename T> static T Load(const char *data)
 {
     T value;
     std::memcpy(&value, data, sizeof(T));
     return value;
 }
 
-double LoadAsDouble(const std::string &type, const char *data)
+static double LoadAsDouble(const std::string &type, const char *data)
 {
     if (type == "char" || type == "int8")
     {
@@ -90,10 +96,10 @@ double LoadAsDouble(const std::string &type, const char *data)
     return Load<double>(data);
 }
 
-class Cursor
+class raylidar::simulation::PlyIO::Cursor
 {
   public:
-    Cursor(const std::vector<char> &bytes, std::size_t offset) : m_bytes(bytes), m_offset(offset)
+    explicit Cursor(const std::vector<char> &bytes) : m_bytes(bytes)
     {
     }
 
@@ -112,85 +118,79 @@ class Cursor
     const std::vector<char> &m_bytes;
     std::size_t m_offset = 0;
 };
-} // namespace
 
-MeshData LoadPlyMesh(const std::filesystem::path &path)
+raylidar::simulation::PlyIO::PlyHeader raylidar::simulation::PlyIO::ReadPlyHeader(std::istream &file,
+                                                                                  const std::filesystem::path &path)
 {
-    std::ifstream file(path, std::ios::binary);
-
-    if (!file)
-    {
-        throw std::runtime_error("Failed to open PLY file: " + path.string());
-    }
-
-    const std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
-    const std::string headerEnd = "end_header\n";
-    const auto headerEndPosition = std::string_view(bytes.data(), bytes.size()).find(headerEnd);
-
-    if (headerEndPosition == std::string_view::npos)
-    {
-        throw std::runtime_error("PLY header is missing end_header: " + path.string());
-    }
-
-    std::istringstream header(std::string(bytes.data(), headerEndPosition));
-    std::vector<PlyElement> elements;
+    PlyHeader header;
     std::string line;
+    std::getline(file, line);
+    header.HasSignature = line == "ply" || line == "ply\r";
     bool isBinaryLittleEndian = false;
 
-    while (std::getline(header, line))
+    do
     {
-        if (!line.empty() && line.back() == '\r')
-        {
-            line.pop_back();
-        }
-
         std::istringstream tokens(line);
         std::string keyword;
         tokens >> keyword;
+        if (keyword == "end_header")
+        {
+            if (!isBinaryLittleEndian)
+            {
+                throw std::runtime_error("Only binary_little_endian PLY is supported: " + path.string());
+            }
+            return header;
+        }
 
         if (keyword == "format")
         {
-            std::string format;
-            tokens >> format;
-            isBinaryLittleEndian = format == "binary_little_endian";
+            std::string encoding;
+            tokens >> encoding >> header.Version;
+            isBinaryLittleEndian = encoding == "binary_little_endian";
         }
         else if (keyword == "element")
         {
-            PlyElement element;
+            PlyHeader::Element element;
             tokens >> element.Name >> element.Count;
-            elements.push_back(element);
+            header.Elements.push_back(std::move(element));
         }
         else if (keyword == "property")
         {
-            if (elements.empty())
+            if (header.Elements.empty())
             {
                 throw std::runtime_error("PLY property appears before any element.");
             }
 
-            PlyProperty property;
+            PlyHeader::Property property;
             tokens >> property.Type;
-
             if (property.Type == "list")
             {
                 property.IsList = true;
                 tokens >> property.CountType >> property.Type;
             }
-
             tokens >> property.Name;
-            elements.back().Properties.push_back(property);
+            header.Elements.back().Properties.push_back(std::move(property));
         }
+    } while (std::getline(file, line));
+
+    throw std::runtime_error("PLY header is missing end_header: " + path.string());
+}
+
+raylidar::simulation::MeshData raylidar::simulation::PlyIO::LoadMesh(const std::filesystem::path &path)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file)
+    {
+        throw std::runtime_error("Failed to open PLY file: " + path.string());
     }
 
-    if (!isBinaryLittleEndian)
-    {
-        throw std::runtime_error("Only binary_little_endian PLY is supported: " + path.string());
-    }
+    const auto header = ReadPlyHeader(file, path);
+    const std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
     MeshData mesh;
-    Cursor cursor(bytes, headerEndPosition + headerEnd.size());
+    Cursor cursor(bytes);
 
-    for (const auto &element : elements)
+    for (const auto &element : header.Elements)
     {
         const bool isVertex = element.Name == "vertex";
         const bool isFace = element.Name == "face";
@@ -272,45 +272,31 @@ MeshData LoadPlyMesh(const std::filesystem::path &path)
     return mesh;
 }
 
-std::array<double, 3> BoundingBoxCenter(std::span<const std::array<double, 3>> positions)
+void raylidar::simulation::PlyIO::WritePointCloud(const std::filesystem::path &path,
+                                                  std::span<const std::array<float, 3>> points)
 {
-    constexpr double largest = std::numeric_limits<double>::max();
-    constexpr double lowest = std::numeric_limits<double>::lowest();
+    static_assert(std::endian::native == std::endian::little, "PLY writer assumes a little-endian host.");
 
-    std::array<double, 3> minimum{largest, largest, largest};
-    std::array<double, 3> maximum{lowest, lowest, lowest};
+    std::ofstream file(path, std::ios::binary);
 
-    for (const auto &position : positions)
+    if (!file)
     {
-        for (std::size_t axis = 0; axis < 3; ++axis)
-        {
-            minimum[axis] = std::min(minimum[axis], position[axis]);
-            maximum[axis] = std::max(maximum[axis], position[axis]);
-        }
+        throw std::runtime_error("Failed to open PLY file for writing: " + path.string());
     }
 
-    return {
-        0.5 * (minimum[0] + maximum[0]),
-        0.5 * (minimum[1] + maximum[1]),
-        0.5 * (minimum[2] + maximum[2]),
-    };
-}
+    file << "ply\n"
+         << "format binary_little_endian 1.0\n"
+         << "element vertex " << points.size() << '\n'
+         << "property float x\n"
+         << "property float y\n"
+         << "property float z\n"
+         << "end_header\n";
 
-std::vector<std::array<float, 3>> ToLocalFloat(std::span<const std::array<double, 3>> positions,
-                                               const std::array<double, 3> &origin)
-{
-    std::vector<std::array<float, 3>> local;
-    local.reserve(positions.size());
+    const auto bytes = std::as_bytes(points);
+    file.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 
-    for (const auto &position : positions)
+    if (!file)
     {
-        local.push_back({
-            static_cast<float>(position[0] - origin[0]),
-            static_cast<float>(position[1] - origin[1]),
-            static_cast<float>(position[2] - origin[2]),
-        });
+        throw std::runtime_error("Failed to write PLY file: " + path.string());
     }
-
-    return local;
 }
-} // namespace raylidar::simulation

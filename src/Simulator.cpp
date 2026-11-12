@@ -5,7 +5,8 @@
 #include "simulation/KittiBundle.h"
 #include "simulation/LidarSensor.h"
 #include "simulation/LidarSimulator.h"
-#include "simulation/MeshIO.h"
+#include "simulation/PlyIO.h"
+#include "simulation/SceneCoordinates.h"
 #include "vulkan/CommandContext.h"
 #include "vulkan/VulkanContext.h"
 
@@ -36,7 +37,7 @@ struct Simulator::Impl
          const SensorConfig &config)
         : Sensor(ToSensorDescription(config))
     {
-        const auto mesh = simulation::LoadPlyMesh(meshPath);
+        const auto mesh = simulation::PlyIO::LoadMesh(meshPath);
 
         // Shift into a local frame so float positions keep sub-millimetre precision far from the world origin.
         Origin = simulation::BoundingBoxCenter(mesh.Positions);

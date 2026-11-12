@@ -3,8 +3,8 @@
 #include "simulation/KittiBundle.h"
 #include "simulation/LidarSensor.h"
 #include "simulation/LidarSimulator.h"
-#include "simulation/MeshIO.h"
-#include "simulation/PointCloudIO.h"
+#include "simulation/PlyIO.h"
+#include "simulation/SceneCoordinates.h"
 #include "vulkan/CommandContext.h"
 #include "vulkan/VulkanContext.h"
 
@@ -166,8 +166,8 @@ void EvaluateGtRays(sim::LidarSimulator &simulator, const raylidar::rt::MeshScen
     }
 
     const auto frameName = std::to_string(frame);
-    sim::WritePointCloudPly(outputDirectory / ("gt_" + frameName + "_measured.ply"), ToWorld(measured, origin));
-    sim::WritePointCloudPly(outputDirectory / ("gt_" + frameName + "_simulated.ply"), ToWorld(simulated, origin));
+    sim::PlyIO::WritePointCloud(outputDirectory / ("gt_" + frameName + "_measured.ply"), ToWorld(measured, origin));
+    sim::PlyIO::WritePointCloud(outputDirectory / ("gt_" + frameName + "_simulated.ply"), ToWorld(simulated, origin));
 }
 
 // Simulates a full HDL-64E sweep from the real Velodyne pose of every frame and reports the per-stage cost.
@@ -195,7 +195,7 @@ void RunVelodyneScans(sim::LidarSimulator &simulator, const raylidar::rt::MeshSc
 
         if (index == 0 && !outputDirectory.empty())
         {
-            sim::WritePointCloudPly(outputDirectory / ("velodyne_" + std::to_string(poses[index].Frame) + ".ply"),
+            sim::PlyIO::WritePointCloud(outputDirectory / ("velodyne_" + std::to_string(poses[index].Frame) + ".ply"),
                                     ToWorld(result.Points, origin));
         }
 
@@ -244,7 +244,7 @@ void Run(const std::filesystem::path &shaderPath, const std::filesystem::path &b
     }
 
     const auto loadStart = Clock::now();
-    const auto mesh = sim::LoadPlyMesh(bundle / "mesh" / "mesh.ply");
+    const auto mesh = sim::PlyIO::LoadMesh(bundle / "mesh" / "mesh.ply");
     const auto origin = sim::BoundingBoxCenter(mesh.Positions);
     const auto positions = sim::ToLocalFloat(mesh.Positions, origin);
     const auto gt = sim::LoadGtRays(bundle / "gt_rays" / "gt_rays.bin", origin);
