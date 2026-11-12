@@ -1,4 +1,5 @@
 #include "rt/ASBuilder.h"
+#include "rt/GaussianScene.h"
 #include "rt/MeshScene.h"
 #include "rt/RayQueryTracer.h"
 #include "rt/TraceTypes.h"
@@ -11,7 +12,9 @@
 #include "vulkan/Synchronization.h"
 #include "vulkan/VulkanContext.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -246,6 +249,35 @@ void RunComputeSmoke(const raylidar::vulkan::VulkanContext &context, const std::
         std::cout << "Round " << round + 1 << " passed.\n";
     }
 }
+
+constexpr std::array<raylidar::rt::Gaussian, 5> kGaussianSmokeData{{
+    {{10.0f, 20.0f, 30.0f}, 0.75f, {0.6f, 0.8f, 0.0f}, 2.5f, {0.0f, 0.0f, 1.0f}, 0.5f},
+    {{20.0f, 20.0f, 30.0f}, 0.50f},
+    {{30.0f, 20.0f, 30.0f}, 0.25f},
+    {{40.0f, 20.0f, 30.0f}, 0.90f},
+    {{50.0f, 20.0f, 30.0f}, 0.60f},
+}};
+
+void RunGaussianSceneSmoke(const raylidar::vulkan::VulkanContext &context)
+{
+    constexpr float sigmaCutoff = 3.0f;
+    raylidar::rt::GaussianScene scene(context, {kGaussianSmokeData, sigmaCutoff});
+    {
+        raylidar::rt::ASBuilder builder(context);
+        raylidar::vulkan::CommandContext commands(context);
+        scene.RecordBuild(commands.Begin(), builder);
+        commands.End();
+        commands.SubmitAndWait();
+        scene.ReleaseUploadResources();
+    }
+
+    if (!scene.Tlas().Handle() || scene.Tlas().DeviceAddress() == 0 || !scene.GaussianBuffer().Handle() ||
+        scene.GaussianBuffer().Size() != sizeof(raylidar::rt::Gaussian) * kGaussianSmokeData.size() ||
+        scene.SigmaCutoff() != sigmaCutoff)
+    {
+        throw std::runtime_error("Gaussian scene resource mismatch.");
+    }
+}
 } // namespace
 
 int main(int argc, char *argv[])
@@ -277,6 +309,7 @@ int main(int argc, char *argv[])
 
             RunRayQuerySmoke(context, argv[2]);
             RunComputeSmoke(context, argv[1]);
+            RunGaussianSceneSmoke(context);
         }
 
         std::cout << "Vulkan smoke completed\n";
