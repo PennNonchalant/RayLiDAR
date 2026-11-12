@@ -41,7 +41,7 @@ class GaussianScene;
 class RayQueryTracer
 {
   public:
-    RayQueryTracer(const vulkan::VulkanContext &context, const vulkan::Shader &shader, 
+    RayQueryTracer(const vulkan::VulkanContext &context, const vulkan::Shader &shader,
                    RayQueryMode mode = RayQueryMode::Mesh);
     ~RayQueryTracer() = default;
 

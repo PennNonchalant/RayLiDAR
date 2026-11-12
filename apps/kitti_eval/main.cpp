@@ -196,7 +196,7 @@ void RunVelodyneScans(sim::LidarSimulator &simulator, const raylidar::rt::MeshSc
         if (index == 0 && !outputDirectory.empty())
         {
             sim::PlyIO::WritePointCloud(outputDirectory / ("velodyne_" + std::to_string(poses[index].Frame) + ".ply"),
-                                    ToWorld(result.Points, origin));
+                                        ToWorld(result.Points, origin));
         }
 
         if (index == 0 && poses.size() > 1)

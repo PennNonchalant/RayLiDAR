@@ -31,7 +31,7 @@ std::array<double, 3> BoundingBoxCenter(std::span<const std::array<double, 3>> p
 }
 
 std::vector<std::array<float, 3>> ToLocalFloat(std::span<const std::array<double, 3>> positions,
-                                                                     const std::array<double, 3> &origin)
+                                               const std::array<double, 3> &origin)
 {
     std::vector<std::array<float, 3>> local;
     local.reserve(positions.size());

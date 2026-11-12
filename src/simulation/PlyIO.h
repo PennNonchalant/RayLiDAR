@@ -9,7 +9,6 @@
 #include <span>
 #include <vector>
 
-
 namespace raylidar::simulation
 {
 struct MeshData
