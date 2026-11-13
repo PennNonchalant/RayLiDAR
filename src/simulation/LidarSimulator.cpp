@@ -1,6 +1,6 @@
 #include "LidarSimulator.h"
 
-#include "rt/AccelerationStructure.h"
+#include "rt/GaussianScene.h"
 #include "vulkan/Synchronization.h"
 #include "vulkan/VulkanContext.h"
 
@@ -33,8 +33,9 @@ vulkan::BufferDescription MakeBufferDescription(vk::DeviceSize size, vk::BufferU
 } // namespace
 
 LidarSimulator::LidarSimulator(const vulkan::VulkanContext &context, const std::filesystem::path &traceShaderPath,
-                               std::uint32_t maxRayCount)
-    : m_context(context), m_maxRayCount(maxRayCount), m_shader(context, traceShaderPath), m_tracer(context, m_shader),
+                               std::uint32_t maxRayCount, rt::RayQueryMode mode)
+    : m_context(context), m_maxRayCount(maxRayCount), m_shader(context, traceShaderPath),
+      m_tracer(context, m_shader, mode),
       m_rayBuffer(context, MakeBufferDescription(maxRayCount * sizeof(rt::Ray), vk::BufferUsageFlagBits::eStorageBuffer,
                                                  vulkan::BufferMemoryUsage::Upload)),
       m_hitBuffer(context,
@@ -55,13 +56,29 @@ LidarSimulator::LidarSimulator(const vulkan::VulkanContext &context, const std::
     m_timestampPool = vk::raii::QueryPool(context.Device(), queryPoolInfo);
 }
 
-ScanResult LidarSimulator::Scan(const rt::AccelerationStructure &tlas, std::span<const rt::Ray> rays)
+ScanResult LidarSimulator::Scan(const rt::MeshScene &scene, std::span<const rt::Ray> rays)
 {
     if (rays.size() > m_maxRayCount)
     {
         throw std::out_of_range("Ray count exceeds LidarSimulator capacity.");
     }
 
+    return ScanImpl(scene, rays, rt::MeshTraceParameters{});
+}
+
+ScanResult LidarSimulator::Scan(const rt::GaussianScene &scene, std::span<const rt::Ray> rays, float alphaThreshold)
+{
+    const rt::GaussianTraceParameters parameters{
+        .GaussiansPerBatch = scene.GaussiansPerBatch(),
+        .SigmaCutoff = scene.SigmaCutoff(),
+        .AlphaThreshold = alphaThreshold,
+    };
+    return ScanImpl(scene, rays, parameters);
+}
+
+template <typename SceneType, typename Parameters>
+ScanResult LidarSimulator::ScanImpl(const SceneType &scene, std::span<const rt::Ray> rays, Parameters parameters)
+{
     const auto scanStart = Clock::now();
 
     ScanResult result;
@@ -71,7 +88,7 @@ ScanResult LidarSimulator::Scan(const rt::AccelerationStructure &tlas, std::span
         return result;
     }
 
-    const auto rayCount = static_cast<std::uint32_t>(rays.size());
+    parameters.RayCount = static_cast<std::uint32_t>(rays.size());
     const vk::DeviceSize hitBytes = rays.size() * sizeof(rt::Hit);
 
     const auto uploadStart = Clock::now();
@@ -79,15 +96,13 @@ ScanResult LidarSimulator::Scan(const rt::AccelerationStructure &tlas, std::span
     result.Timings.Upload = MillisecondsSince(uploadStart);
 
     const auto submitStart = Clock::now();
-    m_tracer.SetResources(tlas, m_rayBuffer, m_hitBuffer);
+    m_tracer.SetResources(scene, m_rayBuffer, m_hitBuffer);
 
     const auto &commandBuffer = m_commands.Begin();
 
     commandBuffer.resetQueryPool(*m_timestampPool, 0, kTimestampCount);
     commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *m_timestampPool, 0);
 
-    rt::TraceParameters parameters;
-    parameters.RayCount = rayCount;
     m_tracer.RecordTrace(commandBuffer, parameters);
 
     commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *m_timestampPool, 1);
@@ -145,4 +160,5 @@ ScanResult LidarSimulator::Scan(const rt::AccelerationStructure &tlas, std::span
 
     return result;
 }
+
 } // namespace raylidar::simulation

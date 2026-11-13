@@ -79,6 +79,7 @@ add_test(
     COMMAND raylidar_smoke 
         "${SHADER_BINARY_DIR}/Smoke.spv" 
         "${SHADER_BINARY_DIR}/RayQuerySmoke.spv"
+        "${SHADER_BINARY_DIR}/GaussianTrace.spv"
 )
 
 set_tests_properties(vulkan_context_smoke PROPERTIES
