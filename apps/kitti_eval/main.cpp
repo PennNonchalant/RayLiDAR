@@ -236,7 +236,7 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
 }
 
 void RunMesh(const std::filesystem::path &shaderPath, const std::filesystem::path &bundle,
-         const std::filesystem::path &outputDirectory)
+             const std::filesystem::path &outputDirectory)
 {
     if (!outputDirectory.empty())
     {
@@ -336,8 +336,8 @@ void RunGaussian(const std::filesystem::path &shaderPath, const std::filesystem:
     EvaluateGtRays(gt, simulator.Scan(scene, gt.Rays, alphaThreshold), "2D Gaussian", origin, outputDirectory);
 
     std::cout << std::fixed << std::setprecision(3) << "Gaussians:       " << gaussians.size() << '\n'
-            << "Alpha threshold: " << alphaThreshold << '\n'
-            << "Scene build:     " << buildMs << " ms\n";
+              << "Alpha threshold: " << alphaThreshold << '\n'
+              << "Scene build:     " << buildMs << " ms\n";
 
     RunVelodyneScans(sensor, poses, origin, outputDirectory, "velodyne_gaussian_",
                      [&simulator, &scene, alphaThreshold](std::span<const raylidar::rt::Ray> rays) {
