@@ -1,4 +1,5 @@
 #include "rt/ASBuilder.h"
+#include "rt/GaussianScene.h"
 #include "rt/MeshScene.h"
 #include "simulation/KittiBundle.h"
 #include "simulation/LidarSensor.h"
@@ -20,6 +21,7 @@
 #include <iostream>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace
@@ -75,11 +77,9 @@ float Percentile(std::vector<float> values, double fraction)
 }
 
 // Casts every GT camera ray against the mesh and compares the hit range with the measured LiDAR range.
-void EvaluateGtRays(sim::LidarSimulator &simulator, const raylidar::rt::MeshScene &scene, const sim::GtRays &gt,
+void EvaluateGtRays(const sim::GtRays &gt, const sim::ScanResult &result, std::string_view sceneName,
                     const std::array<double, 3> &origin, const std::filesystem::path &outputDirectory)
 {
-    const auto result = simulator.Scan(scene, gt.Rays);
-
     std::size_t considered = 0;
     std::size_t hits = 0;
     double signedSum = 0.0;
@@ -119,7 +119,7 @@ void EvaluateGtRays(sim::LidarSimulator &simulator, const raylidar::rt::MeshScen
     const double raysPerSecond = static_cast<double>(gt.Rays.size()) / (result.Timings.Trace * 1.0e-3);
 
     std::cout << std::fixed << std::setprecision(3);
-    std::cout << "\n=== GT camera rays vs mesh ===\n"
+    std::cout << "\n=== GT camera rays vs " << sceneName << " ===\n"
               << "Rays traced:        " << gt.Rays.size() << '\n'
               << "Trace time:         " << result.Timings.Trace << " ms (" << raysPerSecond / 1.0e6 << " Mrays/s)\n"
               << "Evaluated (t>=1.5): " << considered << '\n'
@@ -172,12 +172,11 @@ void EvaluateGtRays(sim::LidarSimulator &simulator, const raylidar::rt::MeshScen
 
 // Simulates a full HDL-64E sweep from the real Velodyne pose of every frame and reports the per-stage cost.
 // The first frame is excluded from the averages because it pays one-time warm-up costs.
-void RunVelodyneScans(sim::LidarSimulator &simulator, const raylidar::rt::MeshScene &scene,
-                      const std::vector<sim::VelodynePose> &poses, const std::array<double, 3> &origin,
-                      const std::filesystem::path &outputDirectory)
+template <typename Scan>
+void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::VelodynePose> poses,
+                      const std::array<double, 3> &origin, const std::filesystem::path &outputDirectory,
+                      std::string_view outputPrefix, const Scan &scan)
 {
-    const sim::LidarSensor sensor(sim::LidarSensorDescription{});
-
     sim::ScanTimings sum;
     double generateSum = 0.0;
     double bestTrace = 1.0e30;
@@ -190,13 +189,13 @@ void RunVelodyneScans(sim::LidarSimulator &simulator, const raylidar::rt::MeshSc
         const auto rays = sensor.GenerateRays(sim::ToLocalTransform(poses[index].WorldFromVelodyne, origin));
         const double generate = std::chrono::duration<double, std::milli>(Clock::now() - generateStart).count();
 
-        const auto result = simulator.Scan(scene, rays);
+        const auto result = scan(rays);
         totalHits += result.Points.size();
 
         if (index == 0 && !outputDirectory.empty())
         {
-            sim::PlyIO::WritePointCloud(outputDirectory / ("velodyne_" + std::to_string(poses[index].Frame) + ".ply"),
-                                        ToWorld(result.Points, origin));
+            const auto fileName = std::string(outputPrefix) + std::to_string(poses[index].Frame) + ".ply";
+            sim::PlyIO::WritePointCloud(outputDirectory / fileName, ToWorld(result.Points, origin));
         }
 
         if (index == 0 && poses.size() > 1)
@@ -230,12 +229,13 @@ void RunVelodyneScans(sim::LidarSimulator &simulator, const raylidar::rt::MeshSc
               << "Average hits:       " << static_cast<double>(totalHits) / static_cast<double>(poses.size())
               << " points/frame\n"
               << "Best trace time:    " << bestTrace << " ms/frame\n"
-              << "Average per frame (" << measuredFrames << " frames, first frame excluded):\n";
+              << "Average per frame (" << measuredFrames << " frames"
+              << (poses.size() > 1 ? ", first frame excluded" : "") << "):\n";
 
     PrintTimings(average, generateSum / frames, sensor.RayCount());
 }
 
-void Run(const std::filesystem::path &shaderPath, const std::filesystem::path &bundle,
+void RunMesh(const std::filesystem::path &shaderPath, const std::filesystem::path &bundle,
          const std::filesystem::path &outputDirectory)
 {
     if (!outputDirectory.empty())
@@ -279,8 +279,70 @@ void Run(const std::filesystem::path &shaderPath, const std::filesystem::path &b
     const auto capacity = static_cast<std::uint32_t>(std::max<std::size_t>(gt.Rays.size(), sensor.RayCount()));
     sim::LidarSimulator simulator(context, shaderPath, capacity);
 
-    EvaluateGtRays(simulator, scene, gt, origin, outputDirectory);
-    RunVelodyneScans(simulator, scene, poses, origin, outputDirectory);
+    EvaluateGtRays(gt, simulator.Scan(scene, gt.Rays), "Mesh", origin, outputDirectory);
+    RunVelodyneScans(
+        sensor, poses, origin, outputDirectory, "velodyne_",
+        [&simulator, &scene](std::span<const raylidar::rt::Ray> rays) { return simulator.Scan(scene, rays); });
+
+    if (!outputDirectory.empty())
+    {
+        std::cout << "\nWrote point clouds to " << outputDirectory.string() << '\n';
+    }
+}
+
+void RunGaussian(const std::filesystem::path &shaderPath, const std::filesystem::path &bundle, float sigmaCutoff,
+                 float alphaThreshold, const std::filesystem::path &outputDirectory)
+{
+    const auto loadStart = Clock::now();
+    const auto poses = sim::LoadVelodynePoses(bundle / "camera" / "camera_params.json");
+    const auto &pose = poses.front();
+    const auto &worldFromVelodyne = pose.WorldFromVelodyne;
+    const std::array<double, 3> origin{worldFromVelodyne[0][3], worldFromVelodyne[1][3], worldFromVelodyne[2][3]};
+
+    const auto gaussians = sim::PlyIO::LoadGaussians(bundle / "gs" / "2dgs" / "point_cloud.ply", origin);
+    const auto gt = sim::LoadGtRays(bundle / "gt_rays" / "gt_rays.bin", origin);
+    const auto loadSeconds = std::chrono::duration<double>(Clock::now() - loadStart).count();
+
+    std::cout << std::fixed << std::setprecision(3) << "2D Gaussian: " << gaussians.size() << " splats\n"
+              << "Local origin (W): " << origin[0] << ", " << origin[1] << ", " << origin[2] << '\n'
+              << "Loaded bundle in " << loadSeconds << " s\n";
+
+    raylidar::vulkan::VulkanContext context;
+    const auto buildStart = Clock::now();
+    const raylidar::rt::GaussianSceneDescription sceneDescription{
+        .Gaussians = gaussians,
+        .SigmaCutoff = sigmaCutoff,
+    };
+    raylidar::rt::GaussianScene scene(context, sceneDescription);
+    {
+        raylidar::rt::ASBuilder builder(context);
+        raylidar::vulkan::CommandContext buildCommands(context);
+        scene.RecordBuild(buildCommands.Begin(), builder);
+        buildCommands.End();
+        buildCommands.SubmitAndWait();
+        scene.ReleaseUploadResources();
+    }
+    const double buildMs = std::chrono::duration<double, std::milli>(Clock::now() - buildStart).count();
+
+    const sim::LidarSensor sensor(sim::LidarSensorDescription{});
+    const auto capacity = static_cast<std::uint32_t>(std::max<std::size_t>(gt.Rays.size(), sensor.RayCount()));
+    sim::LidarSimulator simulator(context, shaderPath, capacity, raylidar::rt::RayQueryMode::Gaussian);
+
+    if (!outputDirectory.empty())
+    {
+        std::filesystem::create_directories(outputDirectory);
+    }
+
+    EvaluateGtRays(gt, simulator.Scan(scene, gt.Rays, alphaThreshold), "2D Gaussian", origin, outputDirectory);
+
+    std::cout << std::fixed << std::setprecision(3) << "Gaussians:       " << gaussians.size() << '\n'
+            << "Alpha threshold: " << alphaThreshold << '\n'
+            << "Scene build:     " << buildMs << " ms\n";
+
+    RunVelodyneScans(sensor, poses, origin, outputDirectory, "velodyne_gaussian_",
+                     [&simulator, &scene, alphaThreshold](std::span<const raylidar::rt::Ray> rays) {
+                         return simulator.Scan(scene, rays, alphaThreshold);
+                     });
 
     if (!outputDirectory.empty())
     {
@@ -291,16 +353,28 @@ void Run(const std::filesystem::path &shaderPath, const std::filesystem::path &b
 
 int main(int argc, char *argv[])
 {
-    if (argc != 3 && argc != 4)
-    {
-        std::cerr << "Usage: raylidar_kitti_eval <LidarTrace.spv> <bundle_dir> [output_dir]\n";
-        return EXIT_FAILURE;
-    }
-
     try
     {
-        Run(argv[1], argv[2], argc == 4 ? argv[3] : "");
-        return EXIT_SUCCESS;
+        const std::string_view mode = argc >= 2 ? argv[1] : "";
+
+        if (mode == "--mesh" && (argc == 4 || argc == 5))
+        {
+            RunMesh(argv[2], argv[3], argc == 5 ? argv[4] : "");
+            return EXIT_SUCCESS;
+        }
+
+        if (mode == "--gaussian" && (argc == 6 || argc == 7))
+        {
+            const float sigmaCutoff = std::stof(argv[4]);
+            const float alphaThreshold = std::stof(argv[5]);
+            RunGaussian(argv[2], argv[3], sigmaCutoff, alphaThreshold, argc == 7 ? argv[6] : "");
+            return EXIT_SUCCESS;
+        }
+
+        std::cerr << "Usage: raylidar_kitti_eval --mesh <LidarTrace.spv> <bundle_dir> [output_dir]\n"
+                  << "       raylidar_kitti_eval --gaussian <GaussianTrace.spv> <bundle_dir> "
+                     "<sigma_cutoff> <alpha_threshold> [output_dir]\n";
+        return EXIT_FAILURE;
     }
     catch (const std::exception &exception)
     {

@@ -17,6 +17,7 @@
 namespace raylidar::rt
 {
 class MeshScene;
+class GaussianScene;
 } // namespace raylidar::rt
 
 namespace raylidar::simulation
@@ -34,10 +35,8 @@ struct ScanTimings
 
 struct ScanResult
 {
-    // One hit per input ray, in input order.
     std::vector<rt::Hit> Hits;
 
-    // World-space points of valid hits only.
     std::vector<std::array<float, 3>> Points;
 
     ScanTimings Timings;
@@ -47,7 +46,7 @@ class LidarSimulator
 {
   public:
     LidarSimulator(const vulkan::VulkanContext &context, const std::filesystem::path &traceShaderPath,
-                   std::uint32_t maxRayCount);
+                   std::uint32_t maxRayCount, rt::RayQueryMode mode = rt::RayQueryMode::Mesh);
 
     LidarSimulator(const LidarSimulator &) = delete;
     LidarSimulator &operator=(const LidarSimulator &) = delete;
@@ -60,7 +59,13 @@ class LidarSimulator
     [[nodiscard]]
     ScanResult Scan(const rt::MeshScene &scene, std::span<const rt::Ray> rays);
 
+    [[nodiscard]]
+    ScanResult Scan(const rt::GaussianScene &scene, std::span<const rt::Ray> rays, float alphaThreshold);
+
   private:
+    template <typename SceneType, typename Parameters>
+    ScanResult ScanImpl(const SceneType &scene, std::span<const rt::Ray> rays, Parameters parameters);
+
     const vulkan::VulkanContext &m_context;
     std::uint32_t m_maxRayCount = 0;
 
