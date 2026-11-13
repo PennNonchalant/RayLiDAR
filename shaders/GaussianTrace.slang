@@ -1,3 +1,9 @@
+#ifndef RAYLIDAR_GAUSSIAN_BATCH_SIZE
+#define RAYLIDAR_GAUSSIAN_BATCH_SIZE 1
+#endif
+
+static const uint kHitBatchSize = RAYLIDAR_GAUSSIAN_BATCH_SIZE;
+
 struct Ray
 {
     float3 Origin;
@@ -49,6 +55,14 @@ StructuredBuffer<Gaussian> gaussians;
 [[vk::push_constant]]
 ConstantBuffer<GaussianTraceParameters> parameters;
 
+struct GaussianCandidate
+{
+    float T;
+    uint GaussianIndex;
+    float RadiusSquared;
+    float Opacity;
+};
+
 bool IsBefore(float leftT, uint leftIndex, float rightT, uint rightIndex)
 {
     return leftT < rightT || (leftT == rightT && leftIndex < rightIndex);
@@ -86,11 +100,8 @@ void main(uint3 id : SV_DispatchThreadID)
 
     while (true)
     {
-        bool found = false;
-        float nearestT = 0.0f;
-        uint nearestIndex = 0;
-        float nearestRadiusSquared = 0.0f;
-        float nearestOpacity = 0.0f;
+        GaussianCandidate candidates[kHitBatchSize];
+        uint candidateCount = 0;
 
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF, desc);
@@ -116,44 +127,81 @@ void main(uint3 id : SV_DispatchThreadID)
             {
                 continue;
             }
-            if (found && !IsBefore(t, gaussianIndex, nearestT, nearestIndex))
+            if (candidateCount == kHitBatchSize)
             {
-                continue;
+                GaussianCandidate farthest = candidates[kHitBatchSize - 1];
+                if (!IsBefore(t, gaussianIndex, farthest.T, farthest.GaussianIndex))
+                {
+                    continue;
+                }
             }
 
             float3 delta = offset + t * ray.Direction;
             float2 uv = float2(dot(delta, gaussian.AxisU) / gaussian.SigmaU,
-                               dot(delta, gaussian.AxisV) / gaussian.SigmaV);
+                           dot(delta, gaussian.AxisV) / gaussian.SigmaV);
             float radiusSquared = dot(uv, uv);
             if (radiusSquared > cutoffSquared)
             {
                 continue;
             }
 
-            found = true;
-            nearestT = t;
-            nearestIndex = gaussianIndex;
-            nearestRadiusSquared = radiusSquared;
-            nearestOpacity = gaussian.Opacity;
+            uint insertIndex = 0;
+            bool duplicate = false;
+            for (; insertIndex < candidateCount; ++insertIndex)
+            {
+                GaussianCandidate candidate = candidates[insertIndex];
+                if (candidate.GaussianIndex == gaussianIndex)
+                {
+                    duplicate = true;
+                    break;
+                }
+                if (IsBefore(t, gaussianIndex, candidate.T, candidate.GaussianIndex))
+                {
+                    break;
+                }
+            }
+            if (duplicate)
+            {
+                continue;
+            }
+
+            candidateCount = min(candidateCount + 1u, kHitBatchSize);
+            for (uint slot = candidateCount - 1; slot > insertIndex; --slot)
+            {
+                candidates[slot] = candidates[slot - 1];
+            }
+
+            GaussianCandidate candidate;
+            candidate.T = t;
+            candidate.GaussianIndex = gaussianIndex;
+            candidate.RadiusSquared = radiusSquared;
+            candidate.Opacity = gaussian.Opacity;
+            candidates[insertIndex] = candidate;
         }
 
-        if (!found)
+        for (uint slot = 0; slot < candidateCount; ++slot)
+        {
+            GaussianCandidate candidate = candidates[slot];
+            float alpha = candidate.Opacity * exp(-0.5f * candidate.RadiusSquared);
+            accumulatedAlpha += (1.0f - accumulatedAlpha) * alpha;
+            if (accumulatedAlpha >= parameters.AlphaThreshold)
+            {
+                hit.T = candidate.T;
+                hit.Valid = 1;
+                hits[index] = hit;
+                return;
+            }
+        }
+
+        if (candidateCount < kHitBatchSize)
         {
             break;
         }
 
-        float alpha = nearestOpacity * exp(-0.5f * nearestRadiusSquared);
-        accumulatedAlpha += (1.0f - accumulatedAlpha) * alpha;
-        if (accumulatedAlpha >= parameters.AlphaThreshold)
-        {
-            hit.T = nearestT;
-            hit.Valid = 1;
-            break;
-        }
-
+        GaussianCandidate last = candidates[candidateCount - 1];
         hasPrevious = true;
-        previousT = nearestT;
-        previousIndex = nearestIndex;
+        previousT = last.T;
+        previousIndex = last.GaussianIndex;
     }
 
     hits[index] = hit;
