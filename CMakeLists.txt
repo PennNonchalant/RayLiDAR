@@ -105,6 +105,17 @@ set_tests_properties(lidar_wall PROPERTIES
 )
 
 add_test(
+    NAME lidar_raygen
+    COMMAND raylidar_lidar_test raygen "${SHADER_BINARY_DIR}/LidarRayGen.spv"
+)
+
+set_tests_properties(lidar_raygen PROPERTIES
+    TIMEOUT 30
+    LABELS "gpu;vulkan"
+    FAIL_REGULAR_EXPRESSION "\\[Vulkan\\]\\[error\\]"
+)
+
+add_test(
     NAME api_wall
     COMMAND raylidar_api_test "${SHADER_BINARY_DIR}/LidarTrace.spv"
 )
