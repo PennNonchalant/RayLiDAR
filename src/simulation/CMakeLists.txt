@@ -1,10 +1,12 @@
 add_library(raylidar_simulation STATIC
     HybridScan.cpp
     KittiBundle.cpp
+    LidarFrame.cpp
     LidarSensor.cpp
     LidarSimulator.cpp
     PlyIO.cpp
     SceneCoordinates.cpp
+    TriangleTrust.cpp
 )
 
 target_compile_features(raylidar_simulation PUBLIC cxx_std_20)

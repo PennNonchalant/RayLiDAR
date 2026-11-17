@@ -1,5 +1,6 @@
 #pragma once
 
+#include "LidarFrame.h"
 #include "LidarSimulator.h"
 #include "rt/TraceTypes.h"
 
@@ -16,14 +17,6 @@ class MeshScene;
 
 namespace raylidar::simulation
 {
-// Which representation produced each ray's final hit.
-enum class HitSource : std::uint8_t
-{
-    None,
-    Mesh,
-    Gaussian
-};
-
 struct HybridScanResult
 {
     // Hits, points and timings combined over both passes, in input ray order.
@@ -56,6 +49,8 @@ class HybridScanner
     HybridScanner(LidarSimulator &meshSimulator, LidarSimulator &gaussianSimulator);
 
     // untrustedTriangles: one entry per mesh triangle, non-zero = route to Gaussians. Empty = trust every triangle.
+    // Measured on KITTI-360 4615-4674: routing untrusted triangles (TriangleTrust.h) made accuracy worse, because the
+    // Gaussians are wrong in the same places as the mesh. The default routes only mesh misses.
     [[nodiscard]]
     HybridScanResult Scan(const rt::MeshScene &meshScene, const rt::GaussianScene &gaussianScene,
                           std::span<const rt::Ray> rays, float alphaThreshold,

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace raylidar::simulation
@@ -46,6 +47,13 @@ class LidarSensor
     const LidarSensorDescription &Description() const noexcept
     {
         return m_description;
+    }
+
+    // Unit ray directions in the sensor frame, in ray order.
+    [[nodiscard]]
+    std::span<const std::array<float, 3>> LocalDirections() const noexcept
+    {
+        return m_localDirections;
     }
 
     // Ray index = beam * AzimuthCount + azimuth.

@@ -3,6 +3,7 @@
 #include "simulation/LidarSensor.h"
 #include "simulation/LidarSimulator.h"
 #include "simulation/PlyIO.h"
+#include "simulation/TriangleTrust.h"
 #include "vulkan/CommandContext.h"
 #include "vulkan/VulkanContext.h"
 
@@ -28,6 +29,36 @@ void Check(bool condition, const std::string &message)
     {
         throw std::runtime_error(message);
     }
+}
+
+// CPU-only: a triangle on the Gaussian surface is trusted, one 0.5 m off it is not, one far from any splat is not.
+void RunTrustTest()
+{
+    const std::array<std::array<float, 3>, 9> positions{{
+        {0.0f, 0.0f, 0.0f},
+        {0.3f, 0.0f, 0.0f},
+        {0.0f, 0.3f, 0.0f},
+        {10.0f, 0.0f, 0.5f},
+        {10.3f, 0.0f, 0.5f},
+        {10.0f, 0.3f, 0.5f},
+        {50.0f, 0.0f, 0.0f},
+        {50.3f, 0.0f, 0.0f},
+        {50.0f, 0.3f, 0.0f},
+    }};
+    const std::array<std::uint32_t, 9> indices{0, 1, 2, 3, 4, 5, 6, 7, 8};
+
+    // Flat splats in the z = 0 plane under the first two triangles.
+    std::array<raylidar::rt::Gaussian, 2> gaussians{};
+    gaussians[0].Center = {0.1f, 0.1f, 0.0f};
+    gaussians[1].Center = {10.1f, 0.1f, 0.0f};
+
+    const auto trust = sim::FindUntrustedTriangles(positions, indices, gaussians);
+    Check(trust.Untrusted.size() == 3, "Expected one flag per triangle.");
+    Check(trust.Untrusted[0] == 0, "Triangle on the Gaussian surface should be trusted.");
+    Check(trust.Untrusted[1] == 1, "Triangle 0.5 m off the Gaussian surface should be untrusted.");
+    Check(trust.Untrusted[2] == 1, "Triangle with no splat nearby should be untrusted.");
+    Check(trust.UntrustedCount == 2 && trust.NoNearbySplatCount == 1, "Unexpected untrusted counts.");
+    std::cout << "Triangle trust test passed.\n";
 }
 
 // CPU-only: ray count, unit directions, origin from the pose translation.
@@ -160,6 +191,12 @@ int main(int argc, char *argv[])
             return EXIT_SUCCESS;
         }
 
+        if (mode == "trust" && argc == 2)
+        {
+            RunTrustTest();
+            return EXIT_SUCCESS;
+        }
+
         if (mode == "wall" && (argc == 3 || argc == 4))
         {
             RunWallTest(argv[2], argc == 4 ? argv[3] : "");
@@ -167,6 +204,7 @@ int main(int argc, char *argv[])
         }
 
         std::cerr << "Usage: raylidar_lidar_test sensor\n"
+                  << "       raylidar_lidar_test trust\n"
                   << "       raylidar_lidar_test wall <LidarTrace.spv> [output.ply]\n";
         return EXIT_FAILURE;
     }

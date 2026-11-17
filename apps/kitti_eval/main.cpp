@@ -3,10 +3,12 @@
 #include "rt/MeshScene.h"
 #include "simulation/HybridScan.h"
 #include "simulation/KittiBundle.h"
+#include "simulation/LidarFrame.h"
 #include "simulation/LidarSensor.h"
 #include "simulation/LidarSimulator.h"
 #include "simulation/PlyIO.h"
 #include "simulation/SceneCoordinates.h"
+#include "simulation/TriangleTrust.h"
 #include "vulkan/CommandContext.h"
 #include "vulkan/VulkanContext.h"
 
@@ -23,6 +25,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace
@@ -174,10 +177,18 @@ void EvaluateGtRays(const sim::GtRays &gt, const sim::ScanResult &result, std::s
 
 // Simulates a full HDL-64E sweep from the real Velodyne pose of every frame and reports the per-stage cost.
 // The first frame is excluded from the averages because it pays one-time warm-up costs.
+// With an output directory, every frame is written as <prefix><frame>.rlf (see LidarFrame.h) and the first frame also
+// as a world-space .ply for viewing.
+struct FrameScan
+{
+    sim::ScanResult Result;
+    std::vector<sim::HitSource> Sources; // one per ray
+};
+
 template <typename Scan>
 void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::VelodynePose> poses,
                       const std::array<double, 3> &origin, const std::filesystem::path &outputDirectory,
-                      std::string_view outputPrefix, const Scan &scan)
+                      std::string_view outputPrefix, std::span<const std::uint8_t> untrustedTriangles, const Scan &scan)
 {
     sim::ScanTimings sum;
     double generateSum = 0.0;
@@ -191,13 +202,20 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
         const auto rays = sensor.GenerateRays(sim::ToLocalTransform(poses[index].WorldFromVelodyne, origin));
         const double generate = std::chrono::duration<double, std::milli>(Clock::now() - generateStart).count();
 
-        const auto result = scan(rays);
+        const auto frameScan = scan(rays);
+        const auto &result = frameScan.Result;
         totalHits += result.Points.size();
 
-        if (index == 0 && !outputDirectory.empty())
+        if (!outputDirectory.empty())
         {
-            const auto fileName = std::string(outputPrefix) + std::to_string(poses[index].Frame) + ".ply";
-            sim::PlyIO::WritePointCloud(outputDirectory / fileName, ToWorld(result.Points, origin));
+            const auto name = std::string(outputPrefix) + std::to_string(poses[index].Frame);
+            sim::WriteLidarFrame(
+                outputDirectory / (name + ".rlf"),
+                sim::MakeLidarFrame(sensor, poses[index], result.Hits, frameScan.Sources, untrustedTriangles));
+            if (index == 0)
+            {
+                sim::PlyIO::WritePointCloud(outputDirectory / (name + ".ply"), ToWorld(result.Points, origin));
+            }
         }
 
         if (index == 0 && poses.size() > 1)
@@ -282,9 +300,12 @@ void RunMesh(const std::filesystem::path &shaderPath, const std::filesystem::pat
     sim::LidarSimulator simulator(context, shaderPath, capacity);
 
     EvaluateGtRays(gt, simulator.Scan(scene, gt.Rays), "Mesh", origin, outputDirectory);
-    RunVelodyneScans(
-        sensor, poses, origin, outputDirectory, "velodyne_",
-        [&simulator, &scene](std::span<const raylidar::rt::Ray> rays) { return simulator.Scan(scene, rays); });
+    RunVelodyneScans(sensor, poses, origin, outputDirectory, "velodyne_", {},
+                     [&simulator, &scene](std::span<const raylidar::rt::Ray> rays) {
+                         auto result = simulator.Scan(scene, rays);
+                         auto sources = sim::SourcesFor(result.Hits, sim::HitSource::Mesh);
+                         return FrameScan{std::move(result), std::move(sources)};
+                     });
 
     if (!outputDirectory.empty())
     {
@@ -341,9 +362,11 @@ void RunGaussian(const std::filesystem::path &shaderPath, const std::filesystem:
               << "Alpha threshold: " << alphaThreshold << '\n'
               << "Scene build:     " << buildMs << " ms\n";
 
-    RunVelodyneScans(sensor, poses, origin, outputDirectory, "velodyne_gaussian_",
+    RunVelodyneScans(sensor, poses, origin, outputDirectory, "velodyne_gaussian_", {},
                      [&simulator, &scene, alphaThreshold](std::span<const raylidar::rt::Ray> rays) {
-                         return simulator.Scan(scene, rays, alphaThreshold);
+                         auto result = sim::ScanGaussiansInChunks(simulator, scene, rays, alphaThreshold);
+                         auto sources = sim::SourcesFor(result.Hits, sim::HitSource::Gaussian);
+                         return FrameScan{std::move(result), std::move(sources)};
                      });
 
     if (!outputDirectory.empty())
@@ -422,7 +445,7 @@ void PrintSummaryRow(std::string_view name, const sim::GtRays &gt, std::span<con
 // Mesh vs 2D Gaussian vs hybrid on the same GT rays and the same local frame.
 void RunCompare(const std::filesystem::path &meshShaderPath, const std::filesystem::path &gaussianShaderPath,
                 const std::filesystem::path &meshBundle, const std::filesystem::path &gaussianBundle, float sigmaCutoff,
-                float alphaThreshold)
+                float alphaThreshold, const std::filesystem::path &outputDirectory)
 {
     const auto loadStart = Clock::now();
     const auto mesh = sim::PlyIO::LoadMesh(meshBundle / "mesh" / "mesh.ply");
@@ -436,6 +459,16 @@ void RunCompare(const std::filesystem::path &meshShaderPath, const std::filesyst
     std::cout << std::fixed << std::setprecision(3) << "Mesh: " << mesh.Indices.size() / 3
               << " triangles, 2D Gaussian: " << gaussians.size() << " splats, GT rays: " << gt.Rays.size() << '\n'
               << "Loaded in " << loadSeconds << " s\n";
+
+    // Ground-truth-free: compare the mesh with the 2D Gaussians and flag triangles where they disagree.
+    // The flags only label output points; routing them to the Gaussians made accuracy worse.
+    const sim::TriangleTrustSettings trustSettings;
+    const auto trustStart = Clock::now();
+    const auto trust = sim::FindUntrustedTriangles(positions, mesh.Indices, gaussians, trustSettings);
+    const auto trustSeconds = std::chrono::duration<double>(Clock::now() - trustStart).count();
+    std::cout << "Untrusted triangles (> " << trustSettings.MaxPlaneDistance << " m from the 2D Gaussian surface): "
+              << 100.0 * static_cast<double>(trust.UntrustedCount) / static_cast<double>(trust.Untrusted.size())
+              << " % (" << trust.NoNearbySplatCount << " with no splat nearby), computed in " << trustSeconds << " s\n";
 
     raylidar::vulkan::VulkanContext context;
 
@@ -494,7 +527,7 @@ void RunCompare(const std::filesystem::path &meshShaderPath, const std::filesyst
     const auto fromMesh = Summarize(gt, hybridResult.Result.Hits, isSource(sim::HitSource::Mesh));
     const auto fromGaussian = Summarize(gt, hybridResult.Result.Hits, isSource(sim::HitSource::Gaussian));
 
-    std::cout << "\nHybrid routing:\n"
+    std::cout << "\nHybrid routing (mesh misses go to the 2D Gaussians):\n"
               << "  Rays sent to Gaussian:  " << 100.0 * static_cast<double>(hybridResult.RaysSentToGaussian) / total
               << " %\n"
               << "  Final hits from mesh:   " << 100.0 * static_cast<double>(hybridResult.MeshHits) / total
@@ -504,24 +537,71 @@ void RunCompare(const std::filesystem::path &meshShaderPath, const std::filesyst
               << "  Wall time: mesh " << hybridResult.MeshMilliseconds << " ms, routing "
               << hybridResult.RoutingMilliseconds << " ms, Gaussian " << hybridResult.GaussianMilliseconds << " ms\n";
 
+    // GT is used here only to check the trust label, never to compute it.
+    const auto onTriangles = [&meshResult, &trust](bool untrusted) {
+        return [&meshResult, &trust, untrusted](std::size_t index) {
+            const auto &hit = meshResult.Hits[index];
+            return hit.Valid != 0 && hit.PrimitiveId < trust.Untrusted.size() &&
+                   (trust.Untrusted[hit.PrimitiveId] != 0) == untrusted;
+        };
+    };
+    const auto earlyRate = [&gt, &meshResult](const auto &filter) {
+        std::size_t count = 0;
+        std::size_t early = 0;
+        for (std::size_t index = 0; index < gt.Rays.size(); ++index)
+        {
+            if (gt.RangeGt[index] < kEvaluationRangeMin || !filter(index))
+            {
+                continue;
+            }
+            ++count;
+            early += meshResult.Hits[index].T < gt.RangeGt[index] - 1.0f ? 1 : 0;
+        }
+        return std::pair{count, count > 0 ? 100.0 * static_cast<double>(early) / static_cast<double>(count) : 0.0};
+    };
+    const auto [trustedCount, trustedEarly] = earlyRate(onTriangles(false));
+    const auto [untrustedCount, untrustedEarly] = earlyRate(onTriangles(true));
+    const auto trusted = Summarize(gt, meshResult.Hits, onTriangles(false));
+    const auto untrusted = Summarize(gt, meshResult.Hits, onTriangles(true));
+    const auto meshHitCount = static_cast<double>(trustedCount + untrustedCount);
+
+    std::cout << "\nTrust label on mesh hits (checked against GT):\n"
+              << "  Trusted:   " << 100.0 * static_cast<double>(trustedCount) / meshHitCount << " % of hits, mean "
+              << trusted.Mean << " m, median " << trusted.Median << " m, early > 1 m " << trustedEarly << " %\n"
+              << "  Untrusted: " << 100.0 * static_cast<double>(untrustedCount) / meshHitCount << " % of hits, mean "
+              << untrusted.Mean << " m, median " << untrusted.Median << " m, early > 1 m " << untrustedEarly << " %\n";
+
+    if (!outputDirectory.empty())
+    {
+        std::filesystem::create_directories(outputDirectory);
+    }
+
     std::cout << "\n--- Mesh only ---";
-    RunVelodyneScans(sensor, poses, origin, {}, "velodyne_mesh_",
+    RunVelodyneScans(sensor, poses, origin, outputDirectory, "mesh_", trust.Untrusted,
                      [&meshSimulator, &meshScene](std::span<const raylidar::rt::Ray> rays) {
-                         return meshSimulator.Scan(meshScene, rays);
+                         auto result = meshSimulator.Scan(meshScene, rays);
+                         auto sources = sim::SourcesFor(result.Hits, sim::HitSource::Mesh);
+                         return FrameScan{std::move(result), std::move(sources)};
                      });
 
     std::cout << "\n--- Hybrid ---";
     std::size_t routedRays = 0;
     std::size_t scannedRays = 0;
-    RunVelodyneScans(sensor, poses, origin, {}, "velodyne_hybrid_", [&](std::span<const raylidar::rt::Ray> rays) {
-        auto scan = hybrid.Scan(meshScene, gaussianScene, rays, alphaThreshold);
-        routedRays += scan.RaysSentToGaussian;
-        scannedRays += rays.size();
-        return std::move(scan.Result);
-    });
+    RunVelodyneScans(sensor, poses, origin, outputDirectory, "hybrid_", trust.Untrusted,
+                     [&](std::span<const raylidar::rt::Ray> rays) {
+                         auto scan = hybrid.Scan(meshScene, gaussianScene, rays, alphaThreshold);
+                         routedRays += scan.RaysSentToGaussian;
+                         scannedRays += rays.size();
+                         return FrameScan{std::move(scan.Result), std::move(scan.Sources)};
+                     });
 
     std::cout << "Hybrid HDL-64E: " << 100.0 * static_cast<double>(routedRays) / static_cast<double>(scannedRays)
               << " % of rays sent to Gaussian\n";
+
+    if (!outputDirectory.empty())
+    {
+        std::cout << "\nWrote .rlf frames to " << outputDirectory.string() << '\n';
+    }
 }
 } // namespace
 
@@ -545,9 +625,10 @@ int main(int argc, char *argv[])
             return EXIT_SUCCESS;
         }
 
-        if (mode == "--compare" && argc == 8)
+        if (mode == "--compare" && (argc == 8 || argc == 9))
         {
-            RunCompare(argv[2], argv[3], argv[4], argv[5], std::stof(argv[6]), std::stof(argv[7]));
+            RunCompare(argv[2], argv[3], argv[4], argv[5], std::stof(argv[6]), std::stof(argv[7]),
+                       argc == 9 ? argv[8] : "");
             return EXIT_SUCCESS;
         }
 
@@ -555,7 +636,7 @@ int main(int argc, char *argv[])
                   << "       raylidar_kitti_eval --gaussian <GaussianTrace.spv> <bundle_dir> "
                      "<sigma_cutoff> <alpha_threshold> [output_dir]\n"
                   << "       raylidar_kitti_eval --compare <LidarTrace.spv> <GaussianTrace.spv> <mesh_bundle> "
-                     "<gaussian_bundle> <sigma_cutoff> <alpha_threshold>\n";
+                     "<gaussian_bundle> <sigma_cutoff> <alpha_threshold> [output_dir]\n";
         return EXIT_FAILURE;
     }
     catch (const std::exception &exception)
