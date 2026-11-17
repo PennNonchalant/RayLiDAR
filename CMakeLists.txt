@@ -94,6 +94,12 @@ set_tests_properties(lidar_sensor PROPERTIES
     TIMEOUT 30
 )
 
+add_test(NAME lidar_trust COMMAND raylidar_lidar_test trust)
+
+set_tests_properties(lidar_trust PROPERTIES
+    TIMEOUT 30
+)
+
 add_test(
     NAME lidar_wall
     COMMAND raylidar_lidar_test wall "${SHADER_BINARY_DIR}/LidarTrace.spv"
