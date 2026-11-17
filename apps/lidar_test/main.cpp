@@ -1,13 +1,18 @@
 #include "rt/ASBuilder.h"
 #include "rt/MeshScene.h"
+#include "simulation/GpuRayGenerator.h"
 #include "simulation/LidarSensor.h"
 #include "simulation/LidarSimulator.h"
 #include "simulation/PlyIO.h"
 #include "simulation/TriangleTrust.h"
+#include "vulkan/Buffer.h"
 #include "vulkan/CommandContext.h"
+#include "vulkan/Synchronization.h"
 #include "vulkan/VulkanContext.h"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -18,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -177,6 +183,103 @@ void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem:
         std::cout << "Wrote " << plyPath.string() << '\n';
     }
 }
+
+// GPU: rays generated on the GPU must match LidarSensor's CPU rays for a non-trivial pose.
+void RunRayGenTest(const std::filesystem::path &shaderPath)
+{
+    const sim::LidarSensorDescription description{};
+    const sim::LidarSensor sensor(description);
+
+    // Yaw of 30 degrees plus a translation far from the origin, like a real local pose.
+    const float yaw = 30.0f * 3.14159265f / 180.0f;
+    sim::Transform pose = sim::kIdentityTransform;
+    pose[0][0] = std::cos(yaw);
+    pose[0][1] = -std::sin(yaw);
+    pose[1][0] = std::sin(yaw);
+    pose[1][1] = std::cos(yaw);
+    pose[0][3] = -49.5f;
+    pose[1][3] = 5.1f;
+    pose[2][3] = -5.4f;
+
+    const auto expected = sensor.GenerateRays(pose);
+
+    raylidar::vulkan::VulkanContext context;
+    sim::GpuRayGenerator generator(context, shaderPath);
+
+    const vk::DeviceSize rayBytes = expected.size() * sizeof(raylidar::rt::Ray);
+
+    raylidar::vulkan::BufferDescription rayDescription;
+    rayDescription.Size = rayBytes;
+    rayDescription.Usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc;
+    const raylidar::vulkan::Buffer rayBuffer(context, rayDescription);
+
+    raylidar::vulkan::BufferDescription readbackDescription;
+    readbackDescription.Size = rayBytes;
+    readbackDescription.Usage = vk::BufferUsageFlagBits::eTransferDst;
+    readbackDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Readback;
+    const raylidar::vulkan::Buffer readbackBuffer(context, readbackDescription);
+
+    generator.SetOutput(rayBuffer);
+
+    const vk::raii::QueryPool timestamps(context.Device(), vk::QueryPoolCreateInfo({}, vk::QueryType::eTimestamp, 2));
+
+    raylidar::vulkan::CommandContext commands(context);
+    const auto &commandBuffer = commands.Begin();
+
+    commandBuffer.resetQueryPool(*timestamps, 0, 2);
+    commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *timestamps, 0);
+    generator.Record(commandBuffer, description, pose);
+    commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *timestamps, 1);
+
+    raylidar::vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+                                          vk::AccessFlagBits2::eShaderWrite, vk::PipelineStageFlagBits2::eCopy,
+                                          vk::AccessFlagBits2::eTransferRead);
+    commandBuffer.copyBuffer(rayBuffer.Handle(), readbackBuffer.Handle(), vk::BufferCopy(0, 0, rayBytes));
+    raylidar::vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eCopy,
+                                          vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eHost,
+                                          vk::AccessFlagBits2::eHostRead);
+    commands.End();
+    commands.SubmitAndWait();
+
+    std::vector<raylidar::rt::Ray> actual(expected.size());
+    readbackBuffer.Read(std::as_writable_bytes(std::span(actual)));
+
+    float maxDirectionError = 0.0f;
+
+    for (std::size_t index = 0; index < expected.size(); ++index)
+    {
+        const auto &a = actual[index];
+        const auto &e = expected[index];
+
+        for (std::size_t axis = 0; axis < 3; ++axis)
+        {
+            Check(a.Origin[axis] == e.Origin[axis], "Origin mismatch at ray " + std::to_string(index) + ".");
+            maxDirectionError = std::max(maxDirectionError, std::abs(a.Direction[axis] - e.Direction[axis]));
+        }
+
+        Check(a.TMin == e.TMin && a.TMax == e.TMax, "Range mismatch at ray " + std::to_string(index) + ".");
+    }
+
+    Check(maxDirectionError < 1.0e-4f, "Direction mismatch: max error " + std::to_string(maxDirectionError) + ".");
+
+    // CPU generation time for comparison.
+    const auto cpuStart = std::chrono::steady_clock::now();
+    const auto cpuRays = sensor.GenerateRays(pose);
+    const double cpuMilliseconds =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count();
+
+    const auto [queryResult, ticks] =
+        timestamps.getResults<std::uint64_t>(0, 2, 2 * sizeof(std::uint64_t), sizeof(std::uint64_t),
+                                             vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+    const double gpuMilliseconds = queryResult == vk::Result::eSuccess
+                                       ? static_cast<double>(ticks[1] - ticks[0]) *
+                                             context.PhysicalDeviceProperties().limits.timestampPeriod / 1.0e6
+                                       : 0.0;
+
+    std::cout << "GPU ray generation test passed: " << actual.size() << " rays, max direction error "
+              << maxDirectionError << ". GPU " << gpuMilliseconds << " ms vs CPU " << cpuMilliseconds << " ms ("
+              << cpuRays.size() << " rays).\n";
+}
 } // namespace
 
 int main(int argc, char *argv[])
@@ -197,6 +300,12 @@ int main(int argc, char *argv[])
             return EXIT_SUCCESS;
         }
 
+        if (mode == "raygen" && argc == 3)
+        {
+            RunRayGenTest(argv[2]);
+            return EXIT_SUCCESS;
+        }
+
         if (mode == "wall" && (argc == 3 || argc == 4))
         {
             RunWallTest(argv[2], argc == 4 ? argv[3] : "");
@@ -205,7 +314,8 @@ int main(int argc, char *argv[])
 
         std::cerr << "Usage: raylidar_lidar_test sensor\n"
                   << "       raylidar_lidar_test trust\n"
-                  << "       raylidar_lidar_test wall <LidarTrace.spv> [output.ply]\n";
+                  << "       raylidar_lidar_test wall <LidarTrace.spv> [output.ply]\n"
+                  << "       raylidar_lidar_test raygen <LidarRayGen.spv>\n";
         return EXIT_FAILURE;
     }
     catch (const std::exception &exception)
