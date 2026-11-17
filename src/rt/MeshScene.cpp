@@ -1,5 +1,6 @@
 #include "MeshScene.h"
 
+#include "SceneBuffers.h"
 #include "vulkan/Synchronization.h"
 #include "vulkan/VulkanContext.h"
 
@@ -56,34 +57,15 @@ MeshScene::MeshScene(const vulkan::VulkanContext &context, const MeshSceneDescri
         const auto vertexBytes = std::as_bytes(mesh.Positions);
         const auto indexBytes = std::as_bytes(mesh.Indices);
 
-        vulkan::BufferDescription geometryDescription;
-        geometryDescription.Size = static_cast<vk::DeviceSize>(vertexBytes.size());
-        geometryDescription.Usage = vk::BufferUsageFlagBits::eTransferDst |
-                                    vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
-                                    vk::BufferUsageFlagBits::eShaderDeviceAddress;
-        geometryDescription.MemoryUsage = vulkan::BufferMemoryUsage::Device;
-        geometryDescription.MinimumAlignment = 4;
+        m_meshes.push_back(MeshResources{
+            MakeTriangleBuildInputBuffer(context, vertexBytes.size()),
+            MakeTriangleBuildInputBuffer(context, indexBytes.size()),
+            static_cast<std::uint32_t>(mesh.Positions.size()),
+            static_cast<std::uint32_t>(mesh.Indices.size()),
+        });
 
-        vulkan::Buffer vertexBuffer(context, geometryDescription);
-
-        geometryDescription.Size = static_cast<vk::DeviceSize>(indexBytes.size());
-
-        vulkan::Buffer indexBuffer(context, geometryDescription);
-
-        m_meshes.push_back(MeshResources{std::move(vertexBuffer), std::move(indexBuffer),
-                                         static_cast<std::uint32_t>(mesh.Positions.size()),
-                                         static_cast<std::uint32_t>(mesh.Indices.size())});
-
-        vulkan::BufferDescription uploadDescription;
-        uploadDescription.Size = static_cast<vk::DeviceSize>(vertexBytes.size());
-        uploadDescription.Usage = vk::BufferUsageFlagBits::eTransferSrc;
-        uploadDescription.MemoryUsage = vulkan::BufferMemoryUsage::Upload;
-
-        m_uploadBuffers.emplace_back(context, uploadDescription).Write(vertexBytes);
-
-        uploadDescription.Size = static_cast<vk::DeviceSize>(indexBytes.size());
-
-        m_uploadBuffers.emplace_back(context, uploadDescription).Write(indexBytes);
+        m_uploadBuffers.push_back(MakeStagingBuffer(context, vertexBytes));
+        m_uploadBuffers.push_back(MakeStagingBuffer(context, indexBytes));
     }
 }
 

@@ -3,6 +3,7 @@ add_library(raylidar_rt STATIC
     ASBuilder.cpp
     MeshScene.cpp
     RayQueryTracer.cpp
+    GaussianScene.cpp
 )
 
 target_compile_features(raylidar_rt PUBLIC cxx_std_20)
