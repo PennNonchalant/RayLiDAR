@@ -25,6 +25,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -44,6 +45,7 @@ void PrintTimings(const sim::ScanTimings &timings, double generate, std::size_t 
     std::cout << "  Ray generation (CPU):   " << generate << " ms\n"
               << "  Upload rays (CPU):      " << timings.Upload << " ms\n"
               << "  Submit + wait (CPU):    " << timings.SubmitWait << " ms\n"
+              << "    Ray generation (GPU): " << timings.RayGen << " ms\n"
               << "    Trace (GPU):          " << timings.Trace << " ms\n"
               << "    Copy hits (GPU):      " << timings.CopyHits << " ms\n"
               << "  Readback + points (CPU):" << timings.Readback << " ms\n"
@@ -179,6 +181,7 @@ void EvaluateGtRays(const sim::GtRays &gt, const sim::ScanResult &result, std::s
 // The first frame is excluded from the averages because it pays one-time warm-up costs.
 // With an output directory, every frame is written as <prefix><frame>.rlf (see LidarFrame.h) and the first frame also
 // as a world-space .ply for viewing.
+// scan takes either the CPU-generated rays (span of rt::Ray) or, for GPU ray generation, the local sensor pose.
 struct FrameScan
 {
     sim::ScanResult Result;
@@ -198,11 +201,22 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
 
     for (std::size_t index = 0; index < poses.size(); ++index)
     {
-        const auto generateStart = Clock::now();
-        const auto rays = sensor.GenerateRays(sim::ToLocalTransform(poses[index].WorldFromVelodyne, origin));
-        const double generate = std::chrono::duration<double, std::milli>(Clock::now() - generateStart).count();
+        const auto pose = sim::ToLocalTransform(poses[index].WorldFromVelodyne, origin);
+        double generate = 0.0;
 
-        const auto frameScan = scan(rays);
+        const auto frameScan = [&] {
+            if constexpr (std::is_invocable_v<const Scan &, const sim::Transform &>)
+            {
+                return scan(pose);
+            }
+            else
+            {
+                const auto generateStart = Clock::now();
+                const auto rays = sensor.GenerateRays(pose);
+                generate = std::chrono::duration<double, std::milli>(Clock::now() - generateStart).count();
+                return scan(std::span<const raylidar::rt::Ray>(rays));
+            }
+        }();
         const auto &result = frameScan.Result;
         totalHits += result.Points.size();
 
@@ -226,6 +240,7 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
         ++measuredFrames;
         generateSum += generate;
         sum.Upload += result.Timings.Upload;
+        sum.RayGen += result.Timings.RayGen;
         sum.Trace += result.Timings.Trace;
         sum.CopyHits += result.Timings.CopyHits;
         sum.SubmitWait += result.Timings.SubmitWait;
@@ -238,6 +253,7 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
 
     sim::ScanTimings average;
     average.Upload = sum.Upload / frames;
+    average.RayGen = sum.RayGen / frames;
     average.Trace = sum.Trace / frames;
     average.CopyHits = sum.CopyHits / frames;
     average.SubmitWait = sum.SubmitWait / frames;
@@ -306,6 +322,20 @@ void RunMesh(const std::filesystem::path &shaderPath, const std::filesystem::pat
                          auto sources = sim::SourcesFor(result.Hits, sim::HitSource::Mesh);
                          return FrameScan{std::move(result), std::move(sources)};
                      });
+
+    // Same sweep with the rays generated on the GPU: no CPU ray generation and no ray upload.
+    const auto rayGenShaderPath = shaderPath.parent_path() / "LidarRayGen.spv";
+    if (std::filesystem::exists(rayGenShaderPath))
+    {
+        simulator.EnableGpuRayGeneration(rayGenShaderPath);
+        std::cout << "\n--- GPU ray generation ---";
+        RunVelodyneScans(sensor, poses, origin, outputDirectory, "velodyne_gpu_", {},
+                         [&simulator, &scene, &sensor](const sim::Transform &pose) {
+                             auto result = simulator.Scan(scene, sensor, pose);
+                             auto sources = sim::SourcesFor(result.Hits, sim::HitSource::Mesh);
+                             return FrameScan{std::move(result), std::move(sources)};
+                         });
+    }
 
     if (!outputDirectory.empty())
     {
