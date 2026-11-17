@@ -1,4 +1,5 @@
 add_library(raylidar_simulation STATIC
+    HybridScan.cpp
     KittiBundle.cpp
     LidarSensor.cpp
     LidarSimulator.cpp
