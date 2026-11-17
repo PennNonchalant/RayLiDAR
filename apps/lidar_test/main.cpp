@@ -2,7 +2,7 @@
 #include "rt/MeshScene.h"
 #include "simulation/LidarSensor.h"
 #include "simulation/LidarSimulator.h"
-#include "simulation/PointCloudIO.h"
+#include "simulation/PlyIO.h"
 #include "vulkan/CommandContext.h"
 #include "vulkan/VulkanContext.h"
 
@@ -98,7 +98,7 @@ void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem:
     const auto rays = sensor.GenerateRays(sim::kIdentityTransform);
 
     sim::LidarSimulator simulator(context, shaderPath, sensor.RayCount());
-    const auto result = simulator.Scan(scene.Tlas(), rays);
+    const auto result = simulator.Scan(scene, rays);
 
     std::size_t expectedHits = 0;
 
@@ -142,7 +142,7 @@ void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem:
 
     if (!plyPath.empty())
     {
-        sim::WritePointCloudPly(plyPath, result.Points);
+        sim::PlyIO::WritePointCloud(plyPath, result.Points);
         std::cout << "Wrote " << plyPath.string() << '\n';
     }
 }

@@ -26,5 +26,23 @@ function(raylidar_add_shaders target source_dir output_dir)
         list(APPEND outputs "${output}")
     endforeach()
 
+    set(gaussian_source "${source_dir}/GaussianTrace.slang")
+    foreach(batch_size IN ITEMS 4 8 16 32 64)
+        set(output "${output_dir}/GaussianTraceK${batch_size}.spv")
+        add_custom_command(
+            OUTPUT "${output}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${output_dir}"
+            COMMAND "${SLANGC_EXECUTABLE}" "${gaussian_source}"
+                -I "${source_dir}" -entry main -target spirv -profile spirv_1_6
+                -matrix-layout-column-major
+                "-DRAYLIDAR_GAUSSIAN_BATCH_SIZE=${batch_size}"
+                -o "${output}" -depfile "${output}.d"
+            DEPENDS "${gaussian_source}" "${SLANGC_EXECUTABLE}"
+            DEPFILE "${output}.d"
+            COMMENT "Compiling GaussianTrace with K=${batch_size}"
+            VERBATIM)
+        list(APPEND outputs "${output}")
+    endforeach()
+
     add_custom_target(${target} DEPENDS ${outputs})
 endfunction()

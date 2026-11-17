@@ -2,8 +2,8 @@ add_library(raylidar_simulation STATIC
     KittiBundle.cpp
     LidarSensor.cpp
     LidarSimulator.cpp
-    MeshIO.cpp
-    PointCloudIO.cpp
+    PlyIO.cpp
+    SceneCoordinates.cpp
 )
 
 target_compile_features(raylidar_simulation PUBLIC cxx_std_20)
