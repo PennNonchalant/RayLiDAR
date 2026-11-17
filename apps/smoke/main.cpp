@@ -1,4 +1,5 @@
 #include "rt/ASBuilder.h"
+#include "rt/GaussianScene.h"
 #include "rt/MeshScene.h"
 #include "rt/RayQueryTracer.h"
 #include "rt/TraceTypes.h"
@@ -11,7 +12,9 @@
 #include "vulkan/Synchronization.h"
 #include "vulkan/VulkanContext.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -24,7 +27,7 @@
 
 namespace
 {
-void RunRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const std::filesystem::path &shaderPath)
+void RunMeshRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const std::filesystem::path &shaderPath)
 {
     const std::array<std::array<float, 3>, 3> vertices = {{
         {-1.0f, -1.0f, 0.0f},
@@ -85,9 +88,9 @@ void RunRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const std:
 
     scene.RecordBuild(commandBuffer, builder);
 
-    tracer.SetResources(scene.Tlas(), rayBuffer, hitBuffer);
+    tracer.SetResources(scene, rayBuffer, hitBuffer);
 
-    raylidar::rt::TraceParameters parameters;
+    raylidar::rt::MeshTraceParameters parameters;
     parameters.RayCount = static_cast<std::uint32_t>(rays.size());
 
     tracer.RecordTrace(commandBuffer, parameters);
@@ -246,15 +249,85 @@ void RunComputeSmoke(const raylidar::vulkan::VulkanContext &context, const std::
         std::cout << "Round " << round + 1 << " passed.\n";
     }
 }
+
+void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const std::filesystem::path &shaderPath)
+{
+    constexpr std::array<raylidar::rt::Gaussian, 6> gaussians{{
+        {{0.0f, 0.0f, 2.0f}, 0.3f},
+        {{8.0f, 0.0f, 2.0f}, 0.3f},
+        {{8.125f, 0.0f, 2.0f}, 0.3f},
+        {{16.0f, 0.0f, 4.0f}, 0.3f},
+        {{16.0f, 0.0f, 2.0f}, 0.3f},
+        {{24.0f, 0.0f, 2.0f}, 0.5f},
+    }};
+
+    constexpr float tMax = 10.0f;
+    constexpr float alphaThreshold = 0.5f;
+    constexpr std::array<raylidar::rt::Ray, 4> rays{{
+        {.Origin = {0.0f, 0.0f, 0.0f}, .TMax = tMax},
+        {.Origin = {8.0625f, 0.0f, 0.0f}, .TMax = tMax},
+        {.Origin = {16.0f, 0.0f, 0.0f}, .TMax = tMax},
+        {.Origin = {24.0f, 0.0f, 0.0f}, .TMax = tMax},
+    }};
+    constexpr std::array<raylidar::rt::Hit, rays.size()> expectedHits{{
+        {tMax, 0},
+        {2.0f, 1},
+        {4.0f, 1},
+        {2.0f, 1},
+    }};
+
+    raylidar::rt::GaussianScene scene(context, {gaussians});
+    raylidar::rt::ASBuilder builder(context);
+    const raylidar::vulkan::Shader shader(context, shaderPath);
+    raylidar::rt::RayQueryTracer tracer(context, shader, raylidar::rt::RayQueryMode::Gaussian);
+
+    const auto rayBytes = std::as_bytes(std::span(rays));
+    const auto storageUsage = vk::BufferUsageFlagBits::eStorageBuffer;
+    raylidar::vulkan::Buffer rayBuffer(context,
+                                       {rayBytes.size(), storageUsage, raylidar::vulkan::BufferMemoryUsage::Upload});
+    rayBuffer.Write(rayBytes);
+
+    std::array<raylidar::rt::Hit, rays.size()> hits{};
+    const auto hitBytes = std::as_writable_bytes(std::span(hits));
+    const raylidar::vulkan::Buffer hitBuffer(
+        context, {hitBytes.size(), storageUsage, raylidar::vulkan::BufferMemoryUsage::Readback});
+
+    raylidar::vulkan::CommandContext commands(context);
+    const auto &commandBuffer = commands.Begin();
+    scene.RecordBuild(commandBuffer, builder);
+    tracer.SetResources(scene, rayBuffer, hitBuffer);
+
+    const raylidar::rt::GaussianTraceParameters parameters{
+        static_cast<std::uint32_t>(rays.size()), scene.GaussiansPerBatch(), scene.SigmaCutoff(), alphaThreshold};
+    tracer.RecordTrace(commandBuffer, parameters);
+    raylidar::vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+                                          vk::AccessFlagBits2::eShaderStorageWrite, vk::PipelineStageFlagBits2::eHost,
+                                          vk::AccessFlagBits2::eHostRead);
+
+    commands.End();
+    commands.SubmitAndWait();
+    scene.ReleaseUploadResources();
+
+    hitBuffer.Read(hitBytes);
+    for (std::size_t index = 0; index < hits.size(); ++index)
+    {
+        if (hits[index].Valid != expectedHits[index].Valid || hits[index].T != expectedHits[index].T)
+        {
+            throw std::runtime_error("Gaussian ray query smoke failed at ray " + std::to_string(index) + ".");
+        }
+    }
+
+    std::cout << "Gaussian ray query smoke passed.\n";
+}
 } // namespace
 
 int main(int argc, char *argv[])
 {
     try
     {
-        if (argc != 3)
+        if (argc != 4)
         {
-            throw std::invalid_argument("Usage: raylidar_smoke <compute.spv> <ray-query.spv>");
+            throw std::invalid_argument("Usage: raylidar_smoke <compute.spv> <ray-query.spv> <gaussian-trace.spv>");
         }
 
         {
@@ -275,8 +348,9 @@ int main(int argc, char *argv[])
                       << context.AccelerationStructureProperties().minAccelerationStructureScratchOffsetAlignment
                       << '\n';
 
-            RunRayQuerySmoke(context, argv[2]);
+            RunMeshRayQuerySmoke(context, argv[2]);
             RunComputeSmoke(context, argv[1]);
+            RunGaussianRayQuerySmoke(context, argv[3]);
         }
 
         std::cout << "Vulkan smoke completed\n";
