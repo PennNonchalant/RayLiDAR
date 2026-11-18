@@ -99,7 +99,9 @@ void RunSensorTest()
 }
 
 // GPU: sensor at the origin, a 40 m x 40 m wall at x = 10. Compares every ray with a CPU reference.
-void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem::path &plyPath)
+// With rayGenShaderPath, the same scan is repeated with rays generated on the GPU and checked the same way.
+void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem::path &plyPath,
+                 const std::filesystem::path &rayGenShaderPath = {})
 {
     constexpr float wallX = 10.0f;
     constexpr float halfSize = 20.0f;
@@ -137,45 +139,63 @@ void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem:
     sim::LidarSimulator simulator(context, shaderPath, sensor.RayCount());
     const auto result = simulator.Scan(scene, rays);
 
-    std::size_t expectedHits = 0;
+    const auto checkWall = [&rays, &sensor](const sim::ScanResult &scan, std::string_view name) {
+        std::size_t expectedHits = 0;
 
-    for (std::size_t index = 0; index < rays.size(); ++index)
-    {
-        const auto &d = rays[index].Direction;
-        const auto &hit = result.Hits[index];
-
-        bool expectHit = false;
-        float expectedT = 0.0f;
-
-        if (d[0] > 1.0e-6f)
+        for (std::size_t index = 0; index < rays.size(); ++index)
         {
-            expectedT = wallX / d[0];
-            const float y = expectedT * d[1];
-            const float z = expectedT * d[2];
+            const auto &d = rays[index].Direction;
+            const auto &hit = scan.Hits[index];
 
-            // Skip rays that graze the wall edge; either answer is acceptable there.
-            if (std::abs(std::abs(y) - halfSize) < 1.0e-3f || std::abs(std::abs(z) - halfSize) < 1.0e-3f)
+            bool expectHit = false;
+            float expectedT = 0.0f;
+
+            if (d[0] > 1.0e-6f)
             {
-                continue;
+                expectedT = wallX / d[0];
+                const float y = expectedT * d[1];
+                const float z = expectedT * d[2];
+
+                // Skip rays that graze the wall edge; either answer is acceptable there.
+                if (std::abs(std::abs(y) - halfSize) < 1.0e-3f || std::abs(std::abs(z) - halfSize) < 1.0e-3f)
+                {
+                    continue;
+                }
+
+                expectHit =
+                    std::abs(y) < halfSize && std::abs(z) < halfSize && expectedT <= sensor.Description().RangeMax;
             }
 
-            expectHit = std::abs(y) < halfSize && std::abs(z) < halfSize && expectedT <= sensor.Description().RangeMax;
+            Check((hit.Valid != 0) == expectHit, "Hit mismatch at ray " + std::to_string(index) + ".");
+
+            if (expectHit)
+            {
+                ++expectedHits;
+                Check(std::abs(hit.T - expectedT) < 1.0e-3f * expectedT,
+                      "Range mismatch at ray " + std::to_string(index) + ".");
+            }
         }
 
-        Check((hit.Valid != 0) == expectHit, "Hit mismatch at ray " + std::to_string(index) + ".");
+        Check(expectedHits > 0, "Wall test produced no hits.");
 
-        if (expectHit)
+        std::cout << "LiDAR wall test passed (" << name << "): " << scan.Points.size() << " / " << rays.size()
+                  << " rays hit, trace " << scan.Timings.Trace << " ms.\n";
+    };
+
+    checkWall(result, "CPU rays");
+
+    if (!rayGenShaderPath.empty())
+    {
+        simulator.EnableGpuRayGeneration(rayGenShaderPath);
+        const auto gpuResult = simulator.Scan(scene, sensor, sim::kIdentityTransform);
+        checkWall(gpuResult, "GPU rays");
+
+        // Points are rebuilt on the CPU for GPU rays; they must land on the wall like the CPU-ray points.
+        for (const auto &point : gpuResult.Points)
         {
-            ++expectedHits;
-            Check(std::abs(hit.T - expectedT) < 1.0e-3f * expectedT,
-                  "Range mismatch at ray " + std::to_string(index) + ".");
+            Check(std::abs(point[0] - wallX) < 1.0e-2f, "GPU-ray point is off the wall.");
         }
     }
-
-    Check(expectedHits > 0, "Wall test produced no hits.");
-
-    std::cout << "LiDAR wall test passed: " << result.Points.size() << " / " << rays.size() << " rays hit, trace "
-              << result.Timings.Trace << " ms.\n";
 
     if (!plyPath.empty())
     {
@@ -306,6 +326,12 @@ int main(int argc, char *argv[])
             return EXIT_SUCCESS;
         }
 
+        if (mode == "wall-gpu" && argc == 4)
+        {
+            RunWallTest(argv[2], "", argv[3]);
+            return EXIT_SUCCESS;
+        }
+
         if (mode == "wall" && (argc == 3 || argc == 4))
         {
             RunWallTest(argv[2], argc == 4 ? argv[3] : "");
@@ -315,7 +341,8 @@ int main(int argc, char *argv[])
         std::cerr << "Usage: raylidar_lidar_test sensor\n"
                   << "       raylidar_lidar_test trust\n"
                   << "       raylidar_lidar_test wall <LidarTrace.spv> [output.ply]\n"
-                  << "       raylidar_lidar_test raygen <LidarRayGen.spv>\n";
+                  << "       raylidar_lidar_test raygen <LidarRayGen.spv>\n"
+                  << "       raylidar_lidar_test wall-gpu <LidarTrace.spv> <LidarRayGen.spv>\n";
         return EXIT_FAILURE;
     }
     catch (const std::exception &exception)
