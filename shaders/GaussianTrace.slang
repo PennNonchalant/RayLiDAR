@@ -59,13 +59,18 @@ struct GaussianCandidate
 {
     float T;
     uint GaussianIndex;
-    float RadiusSquared;
-    float Opacity;
+    float Alpha;
+    float HardwareT;
 };
 
 bool IsBefore(float leftT, uint leftIndex, float rightT, uint rightIndex)
 {
     return leftT < rightT || (leftT == rightT && leftIndex < rightIndex);
+}
+
+float ResumeTMin(float currentMin, float hardwareT)
+{
+    return hardwareT > currentMin ? max(currentMin, asfloat(asuint(hardwareT) - 1u)) : currentMin;
 }
 
 [shader("compute")]
@@ -102,6 +107,8 @@ void main(uint3 id : SV_DispatchThreadID)
     {
         GaussianCandidate candidates[kHitBatchSize];
         uint candidateCount = 0;
+        float nextHardwareT = asfloat(0x7f800000u);
+        float returnUpperBound = asfloat(0x7f800000u);
 
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF, desc);
@@ -109,6 +116,11 @@ void main(uint3 id : SV_DispatchThreadID)
         {
             uint gaussianIndex = query.CandidateRayInstanceCustomIndex() * parameters.GaussiansPerBatch +
                                  query.CandidateRayPrimitiveIndex() / 2u;
+            float hardwareT = query.CandidateTriangleRayT();
+            if (hardwareT > returnUpperBound)
+            {
+                query.CommitNonOpaqueTriangleHit();
+            }
             Gaussian gaussian = gaussians[gaussianIndex];
             float3 normal = cross(gaussian.AxisU, gaussian.AxisV);
             float denominator = dot(normal, ray.Direction);
@@ -130,19 +142,26 @@ void main(uint3 id : SV_DispatchThreadID)
             if (candidateCount == kHitBatchSize)
             {
                 GaussianCandidate farthest = candidates[kHitBatchSize - 1];
-                if (!IsBefore(t, gaussianIndex, farthest.T, farthest.GaussianIndex))
+                if (IsBefore(farthest.T, farthest.GaussianIndex, t, gaussianIndex))
                 {
+                    nextHardwareT = min(nextHardwareT, hardwareT);
                     continue;
                 }
             }
 
             float3 delta = offset + t * ray.Direction;
             float2 uv = float2(dot(delta, gaussian.AxisU) / gaussian.SigmaU,
-                           dot(delta, gaussian.AxisV) / gaussian.SigmaV);
+                               dot(delta, gaussian.AxisV) / gaussian.SigmaV);
             float radiusSquared = dot(uv, uv);
             if (radiusSquared > cutoffSquared)
             {
                 continue;
+            }
+
+            float alpha = gaussian.Opacity * exp(-0.5f * radiusSquared);
+            if (accumulatedAlpha + (1.0f - accumulatedAlpha) * alpha >= parameters.AlphaThreshold)
+            {
+                returnUpperBound = min(returnUpperBound, max(t, hardwareT));
             }
 
             uint insertIndex = 0;
@@ -152,6 +171,7 @@ void main(uint3 id : SV_DispatchThreadID)
                 GaussianCandidate candidate = candidates[insertIndex];
                 if (candidate.GaussianIndex == gaussianIndex)
                 {
+                    candidates[insertIndex].HardwareT = min(candidate.HardwareT, hardwareT);
                     duplicate = true;
                     break;
                 }
@@ -165,6 +185,10 @@ void main(uint3 id : SV_DispatchThreadID)
                 continue;
             }
 
+            if (candidateCount == kHitBatchSize)
+            {
+                nextHardwareT = min(nextHardwareT, candidates[kHitBatchSize - 1].HardwareT);
+            }
             candidateCount = min(candidateCount + 1u, kHitBatchSize);
             for (uint slot = candidateCount - 1; slot > insertIndex; --slot)
             {
@@ -174,16 +198,15 @@ void main(uint3 id : SV_DispatchThreadID)
             GaussianCandidate candidate;
             candidate.T = t;
             candidate.GaussianIndex = gaussianIndex;
-            candidate.RadiusSquared = radiusSquared;
-            candidate.Opacity = gaussian.Opacity;
+            candidate.Alpha = alpha;
+            candidate.HardwareT = hardwareT;
             candidates[insertIndex] = candidate;
         }
 
         for (uint slot = 0; slot < candidateCount; ++slot)
         {
             GaussianCandidate candidate = candidates[slot];
-            float alpha = candidate.Opacity * exp(-0.5f * candidate.RadiusSquared);
-            accumulatedAlpha += (1.0f - accumulatedAlpha) * alpha;
+            accumulatedAlpha += (1.0f - accumulatedAlpha) * candidate.Alpha;
             if (accumulatedAlpha >= parameters.AlphaThreshold)
             {
                 hit.T = candidate.T;
@@ -193,7 +216,7 @@ void main(uint3 id : SV_DispatchThreadID)
             }
         }
 
-        if (candidateCount < kHitBatchSize)
+        if (isinf(nextHardwareT))
         {
             break;
         }
@@ -202,6 +225,7 @@ void main(uint3 id : SV_DispatchThreadID)
         hasPrevious = true;
         previousT = last.T;
         previousIndex = last.GaussianIndex;
+        desc.TMin = ResumeTMin(desc.TMin, nextHardwareT);
     }
 
     hits[index] = hit;
