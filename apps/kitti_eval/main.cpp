@@ -49,6 +49,7 @@ void PrintTimings(const sim::ScanTimings &timings, double generate, std::size_t 
               << "    Trace (GPU):          " << timings.Trace << " ms\n"
               << "    Copy hits (GPU):      " << timings.CopyHits << " ms\n"
               << "  Readback + points (CPU):" << timings.Readback << " ms\n"
+              << "  Hybrid routing (CPU):   " << timings.Routing << " ms\n"
               << "  End-to-end:             " << total << " ms (" << 1000.0 / total << " scans/s, "
               << static_cast<double>(rayCount) / (total * 1.0e3) << " Mrays/s)\n";
 }
@@ -245,6 +246,7 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
         sum.CopyHits += result.Timings.CopyHits;
         sum.SubmitWait += result.Timings.SubmitWait;
         sum.Readback += result.Timings.Readback;
+        sum.Routing += result.Timings.Routing;
         sum.Total += result.Timings.Total;
         bestTrace = std::min(bestTrace, result.Timings.Trace);
     }
@@ -258,6 +260,7 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
     average.CopyHits = sum.CopyHits / frames;
     average.SubmitWait = sum.SubmitWait / frames;
     average.Readback = sum.Readback / frames;
+    average.Routing = sum.Routing / frames;
     average.Total = sum.Total / frames;
 
     std::cout << "\n=== HDL-64E scans from T_W_V ===\n"

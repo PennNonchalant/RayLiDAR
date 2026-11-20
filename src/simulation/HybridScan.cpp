@@ -126,6 +126,9 @@ HybridScanResult HybridScanner::Scan(const rt::MeshScene &meshScene, const rt::G
         }
     }
 
+    output.RoutingMilliseconds += MillisecondsSince(routeStart);
+
+    const auto pointsStart = Clock::now();
     auto &points = output.Result.Points;
     points.reserve(rays.size());
 
@@ -149,8 +152,8 @@ HybridScanResult HybridScanner::Scan(const rt::MeshScene &meshScene, const rt::G
         });
     }
 
-    output.RoutingMilliseconds += MillisecondsSince(routeStart);
-    output.Result.Timings.Readback += output.RoutingMilliseconds;
+    output.Result.Timings.Readback += MillisecondsSince(pointsStart);
+    output.Result.Timings.Routing = output.RoutingMilliseconds;
     output.Result.Timings.Total = MillisecondsSince(scanStart);
 
     return output;

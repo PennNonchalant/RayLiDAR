@@ -15,7 +15,7 @@ namespace raylidar
 struct SensorConfig
 {
     std::uint32_t BeamCount = 64;      // >= 1
-    std::uint32_t AzimuthCount = 2048; // >= 1; BeamCount * AzimuthCount is capped at 16M rays
+    std::uint32_t AzimuthCount = 2048; // >= 1; BeamCount * AzimuthCount is capped at 4,194,240 rays
 
     float ElevationMinDegrees = -24.8f; // in [-90, 90] and <= ElevationMaxDegrees
     float ElevationMaxDegrees = 2.0f;   // in [-90, 90]
@@ -95,6 +95,7 @@ struct ScanTimings
     double CopyHits = 0.0;   // GPU: hit buffer -> readback buffer
     double SubmitWait = 0.0; // CPU: record, submit and wait for the GPU
     double Readback = 0.0;   // CPU: read hits back and build points
+    double Routing = 0.0;    // CPU, Hybrid only: pick the rays for the Gaussian pass and merge both passes
     double Total = 0.0;      // CPU: the whole Simulator::Scan() call, wall time
 };
 

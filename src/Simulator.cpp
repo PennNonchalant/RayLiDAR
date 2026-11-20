@@ -35,8 +35,8 @@ constexpr const char *kMeshTraceShader = "LidarTrace.spv";
 constexpr const char *kRayGenShader = "LidarRayGen.spv";
 constexpr const char *kGaussianTraceShader = "GaussianTraceK16.spv";
 
-// Rays are indexed with 32-bit integers on the GPU, and a sweep this large already takes hundreds of MB.
-constexpr std::uint64_t kMaxRayCount = std::uint64_t{1} << 24;
+// One 64-thread workgroup per 64 rays, and Vulkan only guarantees 65535 workgroups per dispatch.
+constexpr std::uint64_t kMaxRayCount = std::uint64_t{65535} * 64;
 
 // A pose rotation may be off orthonormal by this much (calibration files are rounded).
 constexpr double kRotationTolerance = 1.0e-3;
@@ -98,6 +98,7 @@ ScanTimings ToPublicTimings(const simulation::ScanTimings &timings, double gener
     result.CopyHits = timings.CopyHits;
     result.SubmitWait = timings.SubmitWait;
     result.Readback = timings.Readback;
+    result.Routing = timings.Routing;
     return result; // Total is measured by the caller around the whole scan.
 }
 
