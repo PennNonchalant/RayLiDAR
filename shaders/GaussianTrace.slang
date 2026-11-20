@@ -60,7 +60,6 @@ struct GaussianCandidate
     float T;
     uint GaussianIndex;
     float Alpha;
-    float HardwareT;
 };
 
 bool IsBefore(float leftT, uint leftIndex, float rightT, uint rightIndex)
@@ -99,113 +98,102 @@ void main(uint3 id : SV_DispatchThreadID)
 
     float cutoffSquared = parameters.SigmaCutoff * parameters.SigmaCutoff;
     float accumulatedAlpha = 0.0f;
-    bool hasPrevious = false;
-    float previousT = 0.0f;
-    uint previousIndex = 0;
+    float lastT = -1.0f;
+    uint lastGaussianIndex = 0;
 
     while (true)
     {
         GaussianCandidate candidates[kHitBatchSize];
         uint candidateCount = 0;
-        float nextHardwareT = asfloat(0x7f800000u);
-        float returnUpperBound = asfloat(0x7f800000u);
+        bool hasMore = false;
+        float batchTMax = desc.TMax;
 
         RayQuery<RAY_FLAG_NONE> query;
         query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF, desc);
         while (query.Proceed())
         {
-            uint gaussianIndex = query.CandidateRayInstanceCustomIndex() * parameters.GaussiansPerBatch +
-                                 query.CandidateRayPrimitiveIndex() / 2u;
-            float hardwareT = query.CandidateTriangleRayT();
-            if (hardwareT > returnUpperBound)
+            float t = query.CandidateTriangleRayT();
+            if (t > batchTMax)
             {
                 query.CommitNonOpaqueTriangleHit();
+                hasMore = true;
+                continue;
             }
-            Gaussian gaussian = gaussians[gaussianIndex];
-            float3 normal = cross(gaussian.AxisU, gaussian.AxisV);
-            float denominator = dot(normal, ray.Direction);
-            if (denominator == 0.0f)
+
+            uint primitive = query.CandidateRayPrimitiveIndex();
+            uint gaussianIndex = query.CandidateRayInstanceCustomIndex() * parameters.GaussiansPerBatch + primitive / 2u;
+            if (!IsBefore(lastT, lastGaussianIndex, t, gaussianIndex))
             {
                 continue;
             }
 
-            float3 offset = ray.Origin - gaussian.Center;
-            float t = -dot(normal, offset) / denominator;
-            if (t < ray.TMin || t > ray.TMax)
-            {
-                continue;
-            }
-            if (hasPrevious && !IsBefore(previousT, previousIndex, t, gaussianIndex))
-            {
-                continue;
-            }
-            if (candidateCount == kHitBatchSize)
-            {
-                GaussianCandidate farthest = candidates[kHitBatchSize - 1];
-                if (IsBefore(farthest.T, farthest.GaussianIndex, t, gaussianIndex))
-                {
-                    nextHardwareT = min(nextHardwareT, hardwareT);
-                    continue;
-                }
-            }
-
-            float3 delta = offset + t * ray.Direction;
-            float2 uv = float2(dot(delta, gaussian.AxisU) / gaussian.SigmaU,
-                               dot(delta, gaussian.AxisV) / gaussian.SigmaV);
-            float radiusSquared = dot(uv, uv);
+            float2 b = query.CandidateTriangleBarycentrics();
+            float2 uv = (primitive & 1u) == 0u ? float2(b.x + b.y, b.y) : float2(b.x, b.x + b.y);
+            uv = 2.0f * uv - 1.0f;
+            float radiusSquared = cutoffSquared * dot(uv, uv);
             if (radiusSquared > cutoffSquared)
             {
                 continue;
             }
+            float alpha = gaussians[gaussianIndex].Opacity * exp(-0.5f * radiusSquared);
 
-            float alpha = gaussian.Opacity * exp(-0.5f * radiusSquared);
-            if (accumulatedAlpha + (1.0f - accumulatedAlpha) * alpha >= parameters.AlphaThreshold)
+            uint slot = 0;
+            while (slot < candidateCount && candidates[slot].GaussianIndex != gaussianIndex)
             {
-                returnUpperBound = min(returnUpperBound, max(t, hardwareT));
+                ++slot;
             }
-
-            uint insertIndex = 0;
-            bool duplicate = false;
-            for (; insertIndex < candidateCount; ++insertIndex)
+            if (slot < candidateCount)
             {
-                GaussianCandidate candidate = candidates[insertIndex];
-                if (candidate.GaussianIndex == gaussianIndex)
+                if (t > candidates[slot].T)
                 {
-                    candidates[insertIndex].HardwareT = min(candidate.HardwareT, hardwareT);
-                    duplicate = true;
-                    break;
+                    continue;
                 }
-                if (IsBefore(t, gaussianIndex, candidate.T, candidate.GaussianIndex))
+                if (t == candidates[slot].T)
                 {
-                    break;
+                    alpha = max(alpha, candidates[slot].Alpha);
                 }
             }
-            if (duplicate)
+            else if (candidateCount == kHitBatchSize)
             {
-                continue;
+                hasMore = true;
+                slot = candidateCount - 1;
+                if (!IsBefore(t, gaussianIndex, candidates[slot].T, candidates[slot].GaussianIndex))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                ++candidateCount;
             }
 
-            if (candidateCount == kHitBatchSize)
-            {
-                nextHardwareT = min(nextHardwareT, candidates[kHitBatchSize - 1].HardwareT);
-            }
-            candidateCount = min(candidateCount + 1u, kHitBatchSize);
-            for (uint slot = candidateCount - 1; slot > insertIndex; --slot)
+            while (slot > 0 && IsBefore(t, gaussianIndex, candidates[slot - 1].T, candidates[slot - 1].GaussianIndex))
             {
                 candidates[slot] = candidates[slot - 1];
+                --slot;
             }
+            candidates[slot] = {t, gaussianIndex, alpha};
 
-            GaussianCandidate candidate;
-            candidate.T = t;
-            candidate.GaussianIndex = gaussianIndex;
-            candidate.Alpha = alpha;
-            candidate.HardwareT = hardwareT;
-            candidates[insertIndex] = candidate;
+            if (accumulatedAlpha + (1.0f - accumulatedAlpha) * alpha >= parameters.AlphaThreshold)
+            {
+                batchTMax = min(batchTMax, t);
+            }
+            if (candidateCount == kHitBatchSize)
+            {
+                batchTMax = min(batchTMax, candidates[kHitBatchSize - 1].T);
+            }
         }
 
         for (uint slot = 0; slot < candidateCount; ++slot)
         {
             GaussianCandidate candidate = candidates[slot];
+            if (candidate.T > batchTMax)
+            {
+                hasMore = true;
+                break;
+            }
+            lastT = candidate.T;
+            lastGaussianIndex = candidate.GaussianIndex;
             accumulatedAlpha += (1.0f - accumulatedAlpha) * candidate.Alpha;
             if (accumulatedAlpha >= parameters.AlphaThreshold)
             {
@@ -216,16 +204,11 @@ void main(uint3 id : SV_DispatchThreadID)
             }
         }
 
-        if (isinf(nextHardwareT))
+        if (!hasMore)
         {
             break;
         }
-
-        GaussianCandidate last = candidates[candidateCount - 1];
-        hasPrevious = true;
-        previousT = last.T;
-        previousIndex = last.GaussianIndex;
-        desc.TMin = ResumeTMin(desc.TMin, nextHardwareT);
+        desc.TMin = ResumeTMin(desc.TMin, lastT);
     }
 
     hits[index] = hit;
