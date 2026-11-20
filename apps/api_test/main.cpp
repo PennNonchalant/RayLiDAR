@@ -1,19 +1,39 @@
-// Uses only the public header: proves the API works without any Vulkan or internal headers.
+// Tests the public API through the public header only: no Vulkan or internal headers.
+//
+// Scene: a 40 m x 40 m wall at x = 10, both as a triangle mesh and as opaque 2D Gaussian splats, scanned from the
+// origin. Usage: raylidar_api_test <LidarTrace.spv> (the other shaders are looked up in the same folder).
 #include <raylidar/Simulator.h>
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <random>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace
 {
+constexpr double kWallX = 10.0;
+
+// Rays that hit the wall with CPU-generated rays. GPU-generated rays may flip a few rays that graze an edge.
+constexpr std::size_t kWallHits = 46144;
+constexpr std::size_t kEdgeTolerance = 16;
+
+constexpr raylidar::Pose kIdentity = {{
+    {1.0, 0.0, 0.0, 0.0},
+    {0.0, 1.0, 0.0, 0.0},
+    {0.0, 0.0, 1.0, 0.0},
+    {0.0, 0.0, 0.0, 1.0},
+}};
+
 void Check(bool condition, const std::string &message)
 {
     if (!condition)
@@ -22,7 +42,61 @@ void Check(bool condition, const std::string &message)
     }
 }
 
-// 40 m x 40 m wall at x = 10, as a binary PLY with two triangles.
+bool Near(std::size_t value, std::size_t expected, std::size_t tolerance)
+{
+    return value + tolerance >= expected && value <= expected + tolerance;
+}
+
+template <typename Exception> void CheckThrows(const std::function<void()> &action, const std::string &what)
+{
+    try
+    {
+        action();
+    }
+    catch (const Exception &)
+    {
+        return;
+    }
+    catch (const std::exception &exception)
+    {
+        throw std::runtime_error(what + ": threw the wrong exception type: " + exception.what());
+    }
+    throw std::runtime_error(what + ": did not throw.");
+}
+
+// Removes its folder on destruction, so a failed test leaves nothing behind.
+class TempDirectory
+{
+  public:
+    TempDirectory()
+        : m_path(std::filesystem::temp_directory_path() /
+                 ("raylidar_api_test_" + std::to_string(std::random_device{}())))
+    {
+        std::filesystem::create_directories(m_path);
+    }
+
+    ~TempDirectory()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(m_path, error);
+    }
+
+    TempDirectory(const TempDirectory &) = delete;
+    TempDirectory &operator=(const TempDirectory &) = delete;
+    TempDirectory(TempDirectory &&) = delete;
+    TempDirectory &operator=(TempDirectory &&) = delete;
+
+    [[nodiscard]]
+    const std::filesystem::path &Path() const noexcept
+    {
+        return m_path;
+    }
+
+  private:
+    std::filesystem::path m_path;
+};
+
+// The wall as a binary PLY with two triangles.
 void WriteWallPly(const std::filesystem::path &path)
 {
     const std::array<std::array<float, 3>, 4> vertices = {{
@@ -47,6 +121,223 @@ void WriteWallPly(const std::filesystem::path &path)
         file.write(reinterpret_cast<const char *>(face.data()), sizeof(face));
     }
 }
+
+// The same wall as opaque 2D Gaussian splats facing the sensor, in the 2DGS point_cloud.ply layout.
+void WriteSplatWallPly(const std::filesystem::path &path)
+{
+    constexpr int kSide = 79; // splats from -19.5 m to 19.5 m every 0.5 m
+    const float logScale = std::log(0.3f);
+    const float opacityLogit = std::log(0.99f / 0.01f);
+    const float halfRoot = std::sqrt(0.5f);
+
+    std::ofstream file(path, std::ios::binary);
+    file << "ply\nformat binary_little_endian 1.0\nelement vertex " << kSide * kSide << '\n';
+    for (const char *name : {"x", "y", "z", "opacity", "scale_0", "scale_1", "rot_0", "rot_1", "rot_2", "rot_3"})
+    {
+        file << "property float " << name << '\n';
+    }
+    file << "end_header\n";
+
+    for (int row = 0; row < kSide; ++row)
+    {
+        for (int column = 0; column < kSide; ++column)
+        {
+            // Rotation of 90 degrees about +y turns the splat normal from +z to +x.
+            const std::array<float, 10> record = {
+                static_cast<float>(kWallX),
+                -19.5f + 0.5f * static_cast<float>(column),
+                -19.5f + 0.5f * static_cast<float>(row),
+                opacityLogit,
+                logScale,
+                logScale,
+                halfRoot,
+                0.0f,
+                halfRoot,
+                0.0f,
+            };
+            file.write(reinterpret_cast<const char *>(record.data()), sizeof(record));
+        }
+    }
+}
+
+struct Fixture
+{
+    std::filesystem::path TraceShader;
+    std::filesystem::path MeshPath;
+    std::filesystem::path SplatPath;
+    std::filesystem::path Directory;
+
+    [[nodiscard]]
+    raylidar::SimulatorConfig Config(raylidar::SceneMode mode) const
+    {
+        raylidar::SimulatorConfig config;
+        config.Mode = mode;
+        config.MeshPath = MeshPath;
+        config.GaussianPath = SplatPath;
+        config.ShaderDirectory = TraceShader.parent_path();
+        return config;
+    }
+};
+
+std::size_t Count(const std::vector<raylidar::HitSource> &values, raylidar::HitSource value)
+{
+    std::size_t count = 0;
+    for (const auto entry : values)
+    {
+        count += entry == value ? 1 : 0;
+    }
+    return count;
+}
+
+std::size_t Count(const std::vector<raylidar::SurfaceTrust> &values, raylidar::SurfaceTrust value)
+{
+    std::size_t count = 0;
+    for (const auto entry : values)
+    {
+        count += entry == value ? 1 : 0;
+    }
+    return count;
+}
+
+// Shape and geometry every mode must satisfy on the wall scene.
+void CheckWallScan(const raylidar::Simulator &simulator, const raylidar::ScanOutput &output)
+{
+    const std::size_t rays = simulator.RayCount();
+    Check(output.BeamCount * output.AzimuthCount == rays, "BeamCount * AzimuthCount must equal RayCount().");
+    Check(output.Ranges.size() == rays && output.SensorPoints.size() == rays && output.Sources.size() == rays &&
+              output.Trust.size() == rays,
+          "Every per-ray array needs one entry per ray.");
+    Check(output.Points.size() == rays - Count(output.Sources, raylidar::HitSource::None), "One world point per hit.");
+
+    for (const auto &point : output.Points)
+    {
+        Check(std::abs(point[0] - kWallX) < 1.0e-2, "Hit point is not on the wall.");
+    }
+    for (std::size_t index = 0; index < rays; ++index)
+    {
+        const bool hit = output.Sources[index] != raylidar::HitSource::None;
+        Check(hit == (output.Ranges[index] >= 0.0f), "A ray has a range exactly when it hit.");
+    }
+
+    const auto &timings = output.Timings;
+    Check(timings.Total > 0.0 && timings.Total >= timings.Trace, "Total must cover the whole scan.");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+void MeshModeScansWall(const Fixture &fixture)
+{
+    raylidar::Simulator simulator(fixture.MeshPath, fixture.TraceShader);
+    Check(simulator.Mode() == raylidar::SceneMode::Mesh, "The legacy constructor must use Mesh mode.");
+    Check(!simulator.UsesGpuRayGeneration(), "The legacy constructor must keep CPU ray generation.");
+    Check(simulator.RayCount() == 64u * 2048u, "Unexpected ray count.");
+
+    const auto output = simulator.Scan(kIdentity);
+    CheckWallScan(simulator, output);
+    const auto hits = output.Points.size();
+    Check(Near(hits, kWallHits, kEdgeTolerance), "Unexpected hit count: " + std::to_string(hits));
+    Check(Count(output.Sources, raylidar::HitSource::Mesh) == hits, "Mesh hits must come from the mesh.");
+    Check(Count(output.Trust, raylidar::SurfaceTrust::Unknown) == output.Trust.size(),
+          "Without Gaussians every ray must be Unknown.");
+}
+
+void CpuAndGpuRayGenerationAgree(const Fixture &fixture)
+{
+    auto config = fixture.Config(raylidar::SceneMode::Mesh);
+    config.GaussianPath.clear();
+
+    config.PreferGpuRayGeneration = false;
+    raylidar::Simulator cpu(config);
+    Check(!cpu.UsesGpuRayGeneration(), "PreferGpuRayGeneration = false must generate rays on the CPU.");
+
+    config.PreferGpuRayGeneration = true;
+    raylidar::Simulator gpu(config);
+    const bool shaderFound = std::filesystem::is_regular_file(fixture.TraceShader.parent_path() / "LidarRayGen.spv");
+    Check(gpu.UsesGpuRayGeneration() == shaderFound, "GPU ray generation must be used exactly when its shader exists.");
+
+    const auto cpuOutput = cpu.Scan(kIdentity);
+    const auto gpuOutput = gpu.Scan(kIdentity);
+    CheckWallScan(cpu, cpuOutput);
+    CheckWallScan(gpu, gpuOutput);
+
+    std::size_t different = 0;
+    for (std::size_t index = 0; index < cpuOutput.Ranges.size(); ++index)
+    {
+        different += std::abs(cpuOutput.Ranges[index] - gpuOutput.Ranges[index]) > 1.0e-3f ? 1 : 0;
+    }
+    Check(different <= kEdgeTolerance, std::to_string(different) + " rays differ between CPU and GPU generation.");
+}
+
+void GaussianModeScansWall(const Fixture &fixture)
+{
+    raylidar::Simulator simulator(fixture.Config(raylidar::SceneMode::Gaussian));
+    const auto output = simulator.Scan(kIdentity);
+    CheckWallScan(simulator, output);
+    Check(!output.Points.empty(), "Gaussian mode found no hits.");
+    Check(Count(output.Sources, raylidar::HitSource::Gaussian) == output.Points.size(),
+          "Gaussian hits must come from the Gaussians.");
+}
+
+void HybridModeTrustsAgreeingWall(const Fixture &fixture)
+{
+    raylidar::Simulator simulator(fixture.Config(raylidar::SceneMode::Hybrid));
+    const auto output = simulator.Scan(kIdentity);
+    CheckWallScan(simulator, output);
+
+    // The mesh answers every ray it hits; the splats agree with it there, so those hits are trusted.
+    const auto meshHits = Count(output.Sources, raylidar::HitSource::Mesh);
+    Check(Near(meshHits, kWallHits, kEdgeTolerance), "Hybrid lost mesh hits: " + std::to_string(meshHits));
+    Check(Count(output.Trust, raylidar::SurfaceTrust::Trusted) == meshHits,
+          "Every mesh hit on the agreeing wall must be trusted.");
+}
+
+void MeshModeWithGaussiansAddsTrustLabels(const Fixture &fixture)
+{
+    raylidar::Simulator simulator(fixture.Config(raylidar::SceneMode::Mesh));
+    const auto output = simulator.Scan(kIdentity);
+    CheckWallScan(simulator, output);
+    Check(Count(output.Sources, raylidar::HitSource::Gaussian) == 0, "Mesh mode must not trace the Gaussians.");
+    Check(Count(output.Trust, raylidar::SurfaceTrust::Trusted) == output.Points.size(),
+          "Mesh mode with Gaussians must label every hit on the agreeing wall as trusted.");
+}
+
+void WriteFrameMatchesFormat(const Fixture &fixture)
+{
+    raylidar::Simulator simulator(fixture.MeshPath, fixture.TraceShader);
+    auto output = simulator.Scan(kIdentity);
+
+    // .rlf: 128-byte header, then range f32, point f32x3, source u8 and trust u8 per ray.
+    const auto path = fixture.Directory / "frame.rlf";
+    raylidar::Simulator::WriteFrame(path, output, 7);
+    Check(std::filesystem::file_size(path) == 128 + output.Ranges.size() * (4 + 12 + 1 + 1), "Unexpected .rlf size.");
+
+    output.Trust.pop_back();
+    CheckThrows<std::invalid_argument>([&] { raylidar::Simulator::WriteFrame(path, output); },
+                                       "WriteFrame with a short Trust array");
+}
+
+void MovedSimulatorScans(const Fixture &fixture)
+{
+    raylidar::Simulator source(fixture.MeshPath, fixture.TraceShader);
+    raylidar::Simulator target = std::move(source);
+    CheckWallScan(target, target.Scan(kIdentity));
+}
+
+struct TestCase
+{
+    const char *Name;
+    void (*Run)(const Fixture &);
+};
+
+constexpr std::array kTests = {
+    TestCase{"Mesh mode scans the wall", MeshModeScansWall},
+    TestCase{"CPU and GPU ray generation agree", CpuAndGpuRayGenerationAgree},
+    TestCase{"Gaussian mode scans the wall", GaussianModeScansWall},
+    TestCase{"Hybrid mode trusts the agreeing wall", HybridModeTrustsAgreeingWall},
+    TestCase{"Mesh mode with Gaussians adds trust labels", MeshModeWithGaussiansAddsTrustLabels},
+    TestCase{"WriteFrame matches the .rlf format", WriteFrameMatchesFormat},
+    TestCase{"Moved Simulator scans", MovedSimulatorScans},
+};
 } // namespace
 
 int main(int argc, char *argv[])
@@ -59,38 +350,37 @@ int main(int argc, char *argv[])
 
     try
     {
-        const auto meshPath = std::filesystem::temp_directory_path() / "raylidar_api_test_wall.ply";
-        WriteWallPly(meshPath);
+        const TempDirectory directory;
+        Fixture fixture;
+        fixture.TraceShader = argv[1];
+        fixture.Directory = directory.Path();
+        fixture.MeshPath = directory.Path() / "wall.ply";
+        fixture.SplatPath = directory.Path() / "splats.ply";
+        WriteWallPly(fixture.MeshPath);
+        WriteSplatWallPly(fixture.SplatPath);
 
-        raylidar::Simulator simulator(meshPath, argv[1]);
-        Check(simulator.RayCount() == 64u * 2048u, "Unexpected ray count.");
-
-        const raylidar::Pose identity = {{
-            {1.0, 0.0, 0.0, 0.0},
-            {0.0, 1.0, 0.0, 0.0},
-            {0.0, 0.0, 1.0, 0.0},
-            {0.0, 0.0, 0.0, 1.0},
-        }};
-
-        const auto output = simulator.Scan(identity);
-
-        Check(output.Ranges.size() == simulator.RayCount(), "Expected one range per ray.");
-        Check(output.Points.size() == 46144, "Unexpected hit count: " + std::to_string(output.Points.size()));
-
-        for (const auto &point : output.Points)
+        int failures = 0;
+        for (const auto &test : kTests)
         {
-            Check(std::abs(point[0] - 10.0) < 1.0e-3, "Hit point is not on the wall.");
+            try
+            {
+                test.Run(fixture);
+                std::cout << "[ PASS ] " << test.Name << '\n';
+            }
+            catch (const std::exception &exception)
+            {
+                std::cout << "[ FAIL ] " << test.Name << ": " << exception.what() << '\n';
+                ++failures;
+            }
         }
 
-        std::filesystem::remove(meshPath);
-
-        std::cout << "Public API test passed: " << output.Points.size() << " hits, " << output.Timings.Total
-                  << " ms end-to-end.\n";
-        return EXIT_SUCCESS;
+        std::cout << kTests.size() - static_cast<std::size_t>(failures) << " / " << kTests.size()
+                  << " public API tests passed.\n";
+        return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     catch (const std::exception &exception)
     {
-        std::cerr << "Public API test failed: " << exception.what() << '\n';
+        std::cerr << "Public API test setup failed: " << exception.what() << '\n';
         return EXIT_FAILURE;
     }
 }

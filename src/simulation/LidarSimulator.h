@@ -34,6 +34,7 @@ struct ScanTimings
     double CopyHits = 0.0;   // GPU: hit buffer -> readback buffer (timestamps)
     double SubmitWait = 0.0; // CPU: record, submit and wait for the GPU
     double Readback = 0.0;   // CPU: read hits and build points
+    double Routing = 0.0;    // CPU, hybrid only: pick the rays for the Gaussian pass and merge both passes
     double Total = 0.0;      // CPU: the whole Scan() call
 };
 
