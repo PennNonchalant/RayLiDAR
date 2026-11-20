@@ -14,7 +14,6 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
-#include <limits>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -317,110 +316,11 @@ void WriteFrameMatchesFormat(const Fixture &fixture)
                                        "WriteFrame with a short Trust array");
 }
 
-void InvalidConfigsAreRejected(const Fixture &fixture)
-{
-    using raylidar::SceneMode;
-    const auto rejects = [](const raylidar::SimulatorConfig &config, const std::string &what) {
-        CheckThrows<std::invalid_argument>([&] { raylidar::Simulator simulator(config); }, what);
-    };
-
-    auto config = fixture.Config(SceneMode::Mesh);
-    config.MeshPath.clear();
-    rejects(config, "Mesh mode without a mesh");
-
-    config = fixture.Config(SceneMode::Mesh);
-    config.MeshPath = fixture.Directory / "missing.ply";
-    rejects(config, "Missing mesh file");
-
-    config = fixture.Config(SceneMode::Hybrid);
-    config.GaussianPath.clear();
-    rejects(config, "Hybrid mode without Gaussians");
-
-    config = fixture.Config(SceneMode::Gaussian);
-    config.ShaderDirectory = fixture.Directory;
-    rejects(config, "Missing Gaussian shader");
-
-    config = fixture.Config(SceneMode::Gaussian);
-    config.Gaussian.AlphaThreshold = 1.0f;
-    rejects(config, "AlphaThreshold of 1");
-
-    config = fixture.Config(SceneMode::Gaussian);
-    config.Gaussian.SigmaCutoff = std::numeric_limits<float>::quiet_NaN();
-    rejects(config, "NaN SigmaCutoff");
-
-    config = fixture.Config(SceneMode::Mesh);
-    config.Sensor.BeamCount = 0;
-    rejects(config, "Zero beams");
-
-    config = fixture.Config(SceneMode::Mesh);
-    config.Sensor.BeamCount = 1u << 16;
-    config.Sensor.AzimuthCount = 1u << 16;
-    rejects(config, "Too many rays");
-
-    config = fixture.Config(SceneMode::Mesh);
-    config.Sensor.ElevationMinDegrees = 10.0f;
-    rejects(config, "ElevationMinDegrees above ElevationMaxDegrees");
-
-    config = fixture.Config(SceneMode::Mesh);
-    config.Sensor.RangeMax = config.Sensor.RangeMin;
-    rejects(config, "Empty range interval");
-
-    config = fixture.Config(static_cast<SceneMode>(7));
-    rejects(config, "Unknown SceneMode");
-
-    // Every problem is reported at once.
-    config = fixture.Config(SceneMode::Hybrid);
-    config.GaussianPath.clear();
-    config.Sensor.BeamCount = 0;
-    try
-    {
-        raylidar::Simulator simulator(config);
-        throw std::runtime_error("Two config problems: did not throw.");
-    }
-    catch (const std::invalid_argument &error)
-    {
-        const std::string message = error.what();
-        Check(message.find("GaussianPath") != std::string::npos && message.find("BeamCount") != std::string::npos,
-              "The error must list every problem, got: " + message);
-    }
-}
-
-void InvalidPosesAreRejected(const Fixture &fixture)
-{
-    raylidar::Simulator simulator(fixture.MeshPath, fixture.TraceShader);
-    const auto rejects = [&simulator](const raylidar::Pose &pose, const std::string &what) {
-        CheckThrows<std::invalid_argument>([&] { static_cast<void>(simulator.Scan(pose)); }, what);
-    };
-
-    auto pose = kIdentity;
-    pose[0][0] = 2.0;
-    rejects(pose, "Scaled pose");
-
-    pose = kIdentity;
-    pose[1][1] = -1.0;
-    rejects(pose, "Reflected pose");
-
-    pose = kIdentity;
-    pose[3][0] = 1.0;
-    rejects(pose, "Projective last row");
-
-    pose = kIdentity;
-    pose[0][3] = std::numeric_limits<double>::infinity();
-    rejects(pose, "Infinite translation");
-
-    // A valid pose still works after the rejected ones.
-    pose = kIdentity;
-    pose[2][3] = 1.5;
-    CheckWallScan(simulator, simulator.Scan(pose));
-}
-
-void MovedFromSimulatorIsDetected(const Fixture &fixture)
+void MovedSimulatorScans(const Fixture &fixture)
 {
     raylidar::Simulator source(fixture.MeshPath, fixture.TraceShader);
     raylidar::Simulator target = std::move(source);
     CheckWallScan(target, target.Scan(kIdentity));
-    CheckThrows<std::logic_error>([&] { static_cast<void>(source.Scan(kIdentity)); }, // NOLINT(bugprone-use-after-move)
-                                  "Scan on a moved-from Simulator");
 }
 
 struct TestCase
@@ -436,9 +336,7 @@ constexpr std::array kTests = {
     TestCase{"Hybrid mode trusts the agreeing wall", HybridModeTrustsAgreeingWall},
     TestCase{"Mesh mode with Gaussians adds trust labels", MeshModeWithGaussiansAddsTrustLabels},
     TestCase{"WriteFrame matches the .rlf format", WriteFrameMatchesFormat},
-    TestCase{"Invalid configs are rejected", InvalidConfigsAreRejected},
-    TestCase{"Invalid poses are rejected", InvalidPosesAreRejected},
-    TestCase{"Moved-from Simulator is detected", MovedFromSimulatorIsDetected},
+    TestCase{"Moved Simulator scans", MovedSimulatorScans},
 };
 } // namespace
 

@@ -14,14 +14,9 @@
 #include "vulkan/CommandContext.h"
 #include "vulkan/VulkanContext.h"
 
-#include <cassert>
 #include <chrono>
-#include <cmath>
 #include <optional>
 #include <span>
-#include <stdexcept>
-#include <string>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 
@@ -34,13 +29,6 @@ using Clock = std::chrono::steady_clock;
 constexpr const char *kMeshTraceShader = "LidarTrace.spv";
 constexpr const char *kRayGenShader = "LidarRayGen.spv";
 constexpr const char *kGaussianTraceShader = "GaussianTraceK16.spv";
-
-// One 64-thread workgroup per 64 rays, and Vulkan only guarantees 65535 workgroups per dispatch.
-constexpr std::uint64_t kMaxRayCount = std::uint64_t{65535} * 64;
-
-// A pose rotation may be off orthonormal by this much (calibration files are rounded).
-constexpr double kRotationTolerance = 1.0e-3;
-constexpr double kPoseLastRowTolerance = 1.0e-9;
 
 double MillisecondsSince(Clock::time_point start)
 {
@@ -102,14 +90,6 @@ ScanTimings ToPublicTimings(const simulation::ScanTimings &timings, double gener
     return result; // Total is measured by the caller around the whole scan.
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// Validation. Every problem is collected first, so the caller can fix them all at once.
-
-bool IsValidMode(SceneMode mode)
-{
-    return mode == SceneMode::Mesh || mode == SceneMode::Gaussian || mode == SceneMode::Hybrid;
-}
-
 bool NeedsMesh(SceneMode mode)
 {
     return mode == SceneMode::Mesh || mode == SceneMode::Hybrid;
@@ -120,86 +100,6 @@ bool NeedsGaussians(SceneMode mode)
     return mode == SceneMode::Gaussian || mode == SceneMode::Hybrid;
 }
 
-bool IsFile(const std::filesystem::path &path)
-{
-    std::error_code error;
-    return std::filesystem::is_regular_file(path, error);
-}
-
-class Problems
-{
-  public:
-    void Add(std::string problem)
-    {
-        m_problems.push_back(std::move(problem));
-    }
-
-    void CheckFile(const std::filesystem::path &path, const std::string &what)
-    {
-        if (!IsFile(path))
-        {
-            Add(what + " not found: " + path.string());
-        }
-    }
-
-    void ThrowIfAny(const std::string &context) const
-    {
-        if (m_problems.empty())
-        {
-            return;
-        }
-        std::string message = context;
-        for (const auto &problem : m_problems)
-        {
-            message += "\n  - " + problem;
-        }
-        throw std::invalid_argument(message);
-    }
-
-  private:
-    std::vector<std::string> m_problems;
-};
-
-void CheckSensor(const SensorConfig &sensor, Problems &problems)
-{
-    if (sensor.BeamCount == 0 || sensor.AzimuthCount == 0)
-    {
-        problems.Add("Sensor.BeamCount and Sensor.AzimuthCount must be at least 1.");
-    }
-    else if (std::uint64_t{sensor.BeamCount} * sensor.AzimuthCount > kMaxRayCount)
-    {
-        problems.Add("Sensor.BeamCount * Sensor.AzimuthCount must be at most " + std::to_string(kMaxRayCount) + ".");
-    }
-
-    const auto inElevationRange = [](float degrees) { return std::isfinite(degrees) && std::abs(degrees) <= 90.0f; };
-    if (!inElevationRange(sensor.ElevationMinDegrees) || !inElevationRange(sensor.ElevationMaxDegrees))
-    {
-        problems.Add("Sensor elevations must be in [-90, 90] degrees.");
-    }
-    else if (sensor.ElevationMinDegrees > sensor.ElevationMaxDegrees)
-    {
-        problems.Add("Sensor.ElevationMinDegrees must not exceed Sensor.ElevationMaxDegrees.");
-    }
-
-    if (!std::isfinite(sensor.RangeMin) || !std::isfinite(sensor.RangeMax) || sensor.RangeMin < 0.0f ||
-        sensor.RangeMax <= sensor.RangeMin)
-    {
-        problems.Add("Sensor ranges must satisfy 0 <= RangeMin < RangeMax.");
-    }
-}
-
-void CheckGaussianTrace(const GaussianTraceConfig &gaussian, Problems &problems)
-{
-    if (!std::isfinite(gaussian.SigmaCutoff) || gaussian.SigmaCutoff <= 0.0f)
-    {
-        problems.Add("Gaussian.SigmaCutoff must be positive.");
-    }
-    if (!std::isfinite(gaussian.AlphaThreshold) || gaussian.AlphaThreshold <= 0.0f || gaussian.AlphaThreshold >= 1.0f)
-    {
-        problems.Add("Gaussian.AlphaThreshold must be in (0, 1).");
-    }
-}
-
 struct ShaderPaths
 {
     std::filesystem::path MeshTrace;     // empty when no mesh is traced
@@ -207,101 +107,26 @@ struct ShaderPaths
     std::filesystem::path RayGen;        // empty when rays are generated on the CPU
 };
 
-// Checks the whole config and finds the shaders it needs. Touches only the file system, never the GPU.
-ShaderPaths ValidateAndFindShaders(const SimulatorConfig &config, const std::filesystem::path &meshTraceShader)
+ShaderPaths FindShaders(const SimulatorConfig &config, const std::filesystem::path &meshTraceShader)
 {
-    Problems problems;
     ShaderPaths shaders;
-
-    if (!IsValidMode(config.Mode))
-    {
-        problems.Add("Mode is not a valid SceneMode.");
-        problems.ThrowIfAny("Invalid SimulatorConfig:");
-    }
-
     if (NeedsMesh(config.Mode))
     {
-        if (config.MeshPath.empty())
-        {
-            problems.Add("MeshPath is empty, but Mesh and Hybrid modes need a mesh.");
-        }
-        else
-        {
-            problems.CheckFile(config.MeshPath, "Mesh");
-        }
         shaders.MeshTrace = meshTraceShader;
-        problems.CheckFile(shaders.MeshTrace, "Mesh trace shader");
     }
-
     if (NeedsGaussians(config.Mode))
     {
-        if (config.GaussianPath.empty())
-        {
-            problems.Add("GaussianPath is empty, but Gaussian and Hybrid modes need 2D Gaussians.");
-        }
         shaders.GaussianTrace = config.ShaderDirectory / kGaussianTraceShader;
-        problems.CheckFile(shaders.GaussianTrace, "Gaussian trace shader");
-        CheckGaussianTrace(config.Gaussian, problems);
     }
-
-    // Used in every mode when given: traced in Gaussian and Hybrid modes, trust labels only in Mesh mode.
-    if (!config.GaussianPath.empty())
-    {
-        problems.CheckFile(config.GaussianPath, "Gaussians");
-    }
-
-    CheckSensor(config.Sensor, problems);
-    problems.ThrowIfAny("Invalid SimulatorConfig:");
 
     // Optional: without this shader, Mesh mode generates rays on the CPU.
     const auto rayGenShader = meshTraceShader.parent_path() / kRayGenShader;
-    if (config.Mode == SceneMode::Mesh && config.PreferGpuRayGeneration && IsFile(rayGenShader))
+    if (config.Mode == SceneMode::Mesh && config.PreferGpuRayGeneration &&
+        std::filesystem::is_regular_file(rayGenShader))
     {
         shaders.RayGen = rayGenShader;
     }
     return shaders;
-}
-
-// Ranges are hit distances along unit sensor directions, so the pose must not scale or shear.
-void ValidatePose(const Pose &pose)
-{
-    for (const auto &row : pose)
-    {
-        for (const double value : row)
-        {
-            if (!std::isfinite(value))
-            {
-                throw std::invalid_argument("Pose has a NaN or infinite entry.");
-            }
-        }
-    }
-
-    if (std::abs(pose[3][0]) > kPoseLastRowTolerance || std::abs(pose[3][1]) > kPoseLastRowTolerance ||
-        std::abs(pose[3][2]) > kPoseLastRowTolerance || std::abs(pose[3][3] - 1.0) > kPoseLastRowTolerance)
-    {
-        throw std::invalid_argument("Pose must have a last row of 0 0 0 1.");
-    }
-
-    for (std::size_t i = 0; i < 3; ++i)
-    {
-        for (std::size_t j = 0; j < 3; ++j)
-        {
-            const double dot = pose[i][0] * pose[j][0] + pose[i][1] * pose[j][1] + pose[i][2] * pose[j][2];
-            if (std::abs(dot - (i == j ? 1.0 : 0.0)) > kRotationTolerance)
-            {
-                throw std::invalid_argument("Pose rotation must be orthonormal (no scale or shear).");
-            }
-        }
-    }
-
-    const auto &r = pose;
-    const double determinant = r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1]) -
-                               r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0]) +
-                               r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
-    if (determinant <= 0.0)
-    {
-        throw std::invalid_argument("Pose rotation must not be a reflection.");
-    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -348,10 +173,6 @@ LocalScene LoadLocalScene(const SimulatorConfig &config)
     if (!config.GaussianPath.empty())
     {
         scene.Gaussians = simulation::PlyIO::LoadGaussians(config.GaussianPath, {0.0, 0.0, 0.0});
-        if (scene.Gaussians.empty())
-        {
-            throw std::runtime_error("Gaussian PLY has no splats: " + config.GaussianPath.string());
-        }
     }
 
     if (NeedsMesh(config.Mode))
@@ -561,18 +382,16 @@ std::unique_ptr<ScanBackend> CreateBackend(SceneMode mode, const vulkan::VulkanC
                                            const simulation::LidarSensor &sensor, const ShaderPaths &shaders,
                                            const GaussianTraceConfig &gaussian)
 {
-    switch (mode)
+    if (mode == SceneMode::Mesh)
     {
-    case SceneMode::Mesh:
-        return std::make_unique<MeshBackend>(context, meshScene.value(), sensor, shaders);
-    case SceneMode::Gaussian:
-        return std::make_unique<GaussianBackend>(context, gaussianScene.value(), sensor, shaders,
-                                                 gaussian.AlphaThreshold);
-    case SceneMode::Hybrid:
-        return std::make_unique<HybridBackend>(context, meshScene.value(), gaussianScene.value(), sensor, shaders,
-                                               gaussian.AlphaThreshold);
+        return std::make_unique<MeshBackend>(context, *meshScene, sensor, shaders);
     }
-    throw std::logic_error("Unhandled SceneMode."); // unreachable: the mode was validated
+    if (mode == SceneMode::Gaussian)
+    {
+        return std::make_unique<GaussianBackend>(context, *gaussianScene, sensor, shaders, gaussian.AlphaThreshold);
+    }
+    return std::make_unique<HybridBackend>(context, *meshScene, *gaussianScene, sensor, shaders,
+                                           gaussian.AlphaThreshold);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -660,8 +479,7 @@ struct Simulator::Impl
 
 Simulator::Simulator(const SimulatorConfig &config)
 {
-    const auto shaders = ValidateAndFindShaders(config, config.ShaderDirectory / kMeshTraceShader);
-    m_impl = std::make_unique<Impl>(config, shaders);
+    m_impl = std::make_unique<Impl>(config, FindShaders(config, config.ShaderDirectory / kMeshTraceShader));
 }
 
 Simulator::Simulator(const std::filesystem::path &meshPath, const std::filesystem::path &traceShaderPath,
@@ -672,11 +490,8 @@ Simulator::Simulator(const std::filesystem::path &meshPath, const std::filesyste
     config.MeshPath = meshPath;
     config.ShaderDirectory = traceShaderPath.parent_path();
     config.Sensor = sensor;
-    // Existing callers always got CPU-generated rays; GPU generation can flip rays that graze an edge.
     config.PreferGpuRayGeneration = false;
-
-    const auto shaders = ValidateAndFindShaders(config, traceShaderPath);
-    m_impl = std::make_unique<Impl>(config, shaders);
+    m_impl = std::make_unique<Impl>(config, FindShaders(config, traceShaderPath));
 }
 
 Simulator::~Simulator() = default;
@@ -687,12 +502,6 @@ Simulator &Simulator::operator=(Simulator &&) noexcept = default;
 
 ScanOutput Simulator::Scan(const Pose &worldFromSensor)
 {
-    if (!m_impl)
-    {
-        throw std::logic_error("Simulator::Scan() called on a moved-from Simulator.");
-    }
-    ValidatePose(worldFromSensor);
-
     const auto start = Clock::now();
     auto &impl = *m_impl;
     const auto sensorToWorld = simulation::ToLocalTransform(worldFromSensor, impl.Origin);
@@ -705,19 +514,16 @@ ScanOutput Simulator::Scan(const Pose &worldFromSensor)
 
 std::uint32_t Simulator::RayCount() const noexcept
 {
-    assert(m_impl && "RayCount() called on a moved-from Simulator");
     return m_impl->Sensor.RayCount();
 }
 
 SceneMode Simulator::Mode() const noexcept
 {
-    assert(m_impl && "Mode() called on a moved-from Simulator");
     return m_impl->Mode;
 }
 
 bool Simulator::UsesGpuRayGeneration() const noexcept
 {
-    assert(m_impl && "UsesGpuRayGeneration() called on a moved-from Simulator");
     return m_impl->Backend->UsesGpuRayGeneration();
 }
 

@@ -15,7 +15,7 @@ namespace raylidar
 struct SensorConfig
 {
     std::uint32_t BeamCount = 64;      // >= 1
-    std::uint32_t AzimuthCount = 2048; // >= 1; BeamCount * AzimuthCount is capped at 4,194,240 rays
+    std::uint32_t AzimuthCount = 2048; // >= 1; BeamCount * AzimuthCount <= 4,194,240 (65535 workgroups of 64)
 
     float ElevationMinDegrees = -24.8f; // in [-90, 90] and <= ElevationMaxDegrees
     float ElevationMaxDegrees = 2.0f;   // in [-90, 90]
@@ -125,15 +125,14 @@ struct ScanOutput
 
 // GPU LiDAR simulator. Loads the scene once, then scans it from any pose.
 //
-// Errors are reported with exceptions: std::invalid_argument for invalid input (config, pose, missing files),
-// std::runtime_error for unreadable files and GPU failures.
+// The config and poses must meet the constraints documented on SensorConfig, GaussianTraceConfig, SimulatorConfig and
+// Pose; they are not checked. Unreadable files and GPU failures throw std::runtime_error.
 //
 // Not thread-safe: run one Scan() at a time per Simulator. Separate Simulators are independent. A moved-from
 // Simulator may only be destroyed or assigned to.
 class Simulator
 {
   public:
-    // Validates the whole config before touching the GPU and reports every problem in one exception.
     RAYLIDAR_EXPORT explicit Simulator(const SimulatorConfig &config);
 
     // Mesh mode, kept for existing callers: rays are always generated on the CPU, as before SimulatorConfig existed.
@@ -149,7 +148,6 @@ class Simulator
     RAYLIDAR_EXPORT Simulator(Simulator &&) noexcept;
     RAYLIDAR_EXPORT Simulator &operator=(Simulator &&) noexcept;
 
-    // Throws std::invalid_argument when worldFromSensor is not a finite rigid transform.
     [[nodiscard]]
     RAYLIDAR_EXPORT ScanOutput Scan(const Pose &worldFromSensor);
 
