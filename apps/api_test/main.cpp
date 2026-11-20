@@ -230,6 +230,7 @@ void MeshModeScansWall(const Fixture &fixture)
 {
     raylidar::Simulator simulator(fixture.MeshPath, fixture.TraceShader);
     Check(simulator.Mode() == raylidar::SceneMode::Mesh, "The legacy constructor must use Mesh mode.");
+    Check(!simulator.UsesGpuRayGeneration(), "The legacy constructor must keep CPU ray generation.");
     Check(simulator.RayCount() == 64u * 2048u, "Unexpected ray count.");
 
     const auto output = simulator.Scan(kIdentity);

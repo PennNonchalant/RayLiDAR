@@ -136,8 +136,8 @@ class Simulator
     // Validates the whole config before touching the GPU and reports every problem in one exception.
     RAYLIDAR_EXPORT explicit Simulator(const SimulatorConfig &config);
 
-    // Mesh mode, kept for existing callers. traceShaderPath: compiled LidarTrace.spv; the other shaders are looked up
-    // in the same folder.
+    // Mesh mode, kept for existing callers: rays are always generated on the CPU, as before SimulatorConfig existed.
+    // traceShaderPath: compiled LidarTrace.spv. Use the SimulatorConfig constructor for GPU ray generation.
     RAYLIDAR_EXPORT Simulator(const std::filesystem::path &meshPath, const std::filesystem::path &traceShaderPath,
                               const SensorConfig &sensor = {});
 

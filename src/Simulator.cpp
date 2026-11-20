@@ -672,6 +672,8 @@ Simulator::Simulator(const std::filesystem::path &meshPath, const std::filesyste
     config.MeshPath = meshPath;
     config.ShaderDirectory = traceShaderPath.parent_path();
     config.Sensor = sensor;
+    // Existing callers always got CPU-generated rays; GPU generation can flip rays that graze an edge.
+    config.PreferGpuRayGeneration = false;
 
     const auto shaders = ValidateAndFindShaders(config, traceShaderPath);
     m_impl = std::make_unique<Impl>(config, shaders);
