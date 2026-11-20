@@ -316,11 +316,10 @@ struct LocalScene
     std::vector<rt::Gaussian> Gaussians;
 };
 
-// Centre of the splats' bounding box. The Gaussians are read again relative to this centre afterwards: shifting the
-// float centres read here would not bring back the precision they already lost.
-std::array<double, 3> GaussianCenter(const std::filesystem::path &path)
+// Splat centres are float32 in the PLY, so reading them unshifted and shifting afterwards gives exactly the same
+// floats as reading them relative to the origin.
+std::array<double, 3> GaussianBoundsCenter(std::span<const rt::Gaussian> gaussians)
 {
-    const auto gaussians = simulation::PlyIO::LoadGaussians(path, {0.0, 0.0, 0.0});
     std::vector<std::array<double, 3>> centers;
     centers.reserve(gaussians.size());
     for (const auto &gaussian : gaussians)
@@ -330,9 +329,29 @@ std::array<double, 3> GaussianCenter(const std::filesystem::path &path)
     return simulation::BoundingBoxCenter(centers);
 }
 
+void ShiftGaussians(std::vector<rt::Gaussian> &gaussians, const std::array<double, 3> &origin)
+{
+    for (auto &gaussian : gaussians)
+    {
+        for (std::size_t axis = 0; axis < gaussian.Center.size(); ++axis)
+        {
+            gaussian.Center[axis] = static_cast<float>(gaussian.Center[axis] - origin[axis]);
+        }
+    }
+}
+
 LocalScene LoadLocalScene(const SimulatorConfig &config)
 {
     LocalScene scene;
+
+    if (!config.GaussianPath.empty())
+    {
+        scene.Gaussians = simulation::PlyIO::LoadGaussians(config.GaussianPath, {0.0, 0.0, 0.0});
+        if (scene.Gaussians.empty())
+        {
+            throw std::runtime_error("Gaussian PLY has no splats: " + config.GaussianPath.string());
+        }
+    }
 
     if (NeedsMesh(config.Mode))
     {
@@ -343,18 +362,10 @@ LocalScene LoadLocalScene(const SimulatorConfig &config)
     }
     else
     {
-        scene.Origin = GaussianCenter(config.GaussianPath);
+        scene.Origin = GaussianBoundsCenter(scene.Gaussians);
     }
 
-    if (!config.GaussianPath.empty())
-    {
-        scene.Gaussians = simulation::PlyIO::LoadGaussians(config.GaussianPath, scene.Origin);
-        if (scene.Gaussians.empty())
-        {
-            throw std::runtime_error("Gaussian PLY has no splats: " + config.GaussianPath.string());
-        }
-    }
-
+    ShiftGaussians(scene.Gaussians, scene.Origin);
     return scene;
 }
 
