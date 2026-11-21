@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -73,7 +74,7 @@ void PrintUsage(std::ostream &out)
         << "Gaussian options (--gaussian, --hybrid, --compare):\n"
         << "  --hit-batch-size <K>            batch size (default " << rt::kDefaultGaussianHitBatchSize << ")\n"
         << "  --gaussian-blas <log2|single>   single (default) or 0 for one BLAS, positive log2 for Morton groups\n"
-        << "  --gaussian-chunk-size <rays>    maximum rays per Gaussian dispatch (default 0: all rays)\n"
+        << "  --gaussian-chunk-size <log2>    0 for all rays (default), positive log2 for 2^log2 rays per chunk\n"
         << "  --candidate-alpha-bound <on|off> tighten using a single candidate (default on)\n"
         << "  --prefix-alpha-bound <on|off>    tighten using a candidate prefix (default on)\n";
 }
@@ -145,12 +146,14 @@ std::optional<Options> ParseOptions(std::span<char *> args)
         }
         else if (flag == "--gaussian-chunk-size")
         {
+            std::size_t log2 = 0;
             const auto end = value.data() + value.size();
-            const auto [parsedEnd, error] = std::from_chars(value.data(), end, options.GaussianChunkSize);
-            if (error != std::errc{} || parsedEnd != end)
+            const auto [parsedEnd, error] = std::from_chars(value.data(), end, log2);
+            if (error != std::errc{} || parsedEnd != end || log2 >= std::numeric_limits<std::size_t>::digits)
             {
                 return std::nullopt;
             }
+            options.GaussianChunkSize = log2 == 0 ? 0 : std::size_t{1} << log2;
         }
         else if (flag == "--candidate-alpha-bound" && (value == "on" || value == "off"))
         {
