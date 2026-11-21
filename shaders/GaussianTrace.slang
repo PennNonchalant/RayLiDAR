@@ -32,7 +32,7 @@ struct Gaussian
 struct GaussianTraceParameters
 {
     uint RayCount;
-    uint GaussiansPerBatch;
+    uint GaussianIndexStride;
     float SigmaCutoff;
     float AlphaThreshold;
 };
@@ -48,6 +48,9 @@ RWStructuredBuffer<Hit> hits;
 
 [[vk::binding(3, 0)]]
 StructuredBuffer<Gaussian> gaussians;
+
+[[vk::binding(4, 0)]]
+StructuredBuffer<uint> gaussianIndices;
 
 [[vk::push_constant]]
 ConstantBuffer<GaussianTraceParameters> parameters;
@@ -118,7 +121,12 @@ void main(uint3 id : SV_DispatchThreadID)
             }
 
             uint primitive = query.CandidateRayPrimitiveIndex();
-            uint gaussianIndex = query.CandidateRayInstanceCustomIndex() * parameters.GaussiansPerBatch + primitive / 2u;
+            uint gaussianIndex = primitive / 2u;
+            if (parameters.GaussianIndexStride != 0u)
+            {
+                uint batchSlot = query.CandidateRayInstanceCustomIndex() * parameters.GaussianIndexStride + gaussianIndex;
+                gaussianIndex = gaussianIndices[batchSlot];
+            }
             if (!IsBefore(lastT, lastGaussianIndex, t, gaussianIndex))
             {
                 continue;

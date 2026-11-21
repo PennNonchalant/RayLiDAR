@@ -20,10 +20,13 @@ struct Gaussian
     float SigmaV = 1.0f;
 };
 
+inline constexpr std::uint32_t kDefaultGaussianBlasGroupSizeLog2 = 0;
+
 struct GaussianSceneDescription
 {
     std::span<const Gaussian> Gaussians{};
     float SigmaCutoff = 3.0f;
+    std::uint32_t BlasGroupSizeLog2 = kDefaultGaussianBlasGroupSizeLog2;
 };
 
 struct GaussianProxyBatch
@@ -36,6 +39,7 @@ struct GaussianProxyGeometry
 {
     std::vector<std::array<float, 3>> Vertices;
     std::vector<std::uint32_t> Indices;
+    std::vector<std::uint32_t> GaussianIndices;
     std::vector<GaussianProxyBatch> Batches;
 
     static GaussianProxyGeometry Create(const GaussianSceneDescription &description, std::uint32_t gaussiansPerBatch);
@@ -68,6 +72,18 @@ class GaussianScene
     }
 
     [[nodiscard]]
+    const std::optional<vulkan::Buffer> &GaussianIndexBuffer() const noexcept
+    {
+        return m_gaussianIndexBuffer;
+    }
+
+    [[nodiscard]]
+    std::size_t BlasCount() const noexcept
+    {
+        return m_blas.size();
+    }
+
+    [[nodiscard]]
     float SigmaCutoff() const noexcept
     {
         return m_sigmaCutoff;
@@ -79,12 +95,19 @@ class GaussianScene
         return m_gaussiansPerBatch;
     }
 
+    [[nodiscard]]
+    std::uint32_t GaussianIndexStride() const noexcept
+    {
+        return m_gaussianIndexBuffer ? m_gaussiansPerBatch : 0;
+    }
+
   private:
     struct BuildResources
     {
         vulkan::Buffer VertexBuffer;
         vulkan::Buffer IndexBuffer;
         vulkan::Buffer GaussianUpload;
+        std::optional<vulkan::Buffer> GaussianIndexUpload;
         vulkan::Buffer VertexUpload;
         vulkan::Buffer IndexUpload;
         std::vector<GaussianProxyBatch> Batches;
@@ -93,6 +116,7 @@ class GaussianScene
     float m_sigmaCutoff = 0.0f;
     std::uint32_t m_gaussiansPerBatch = 0;
     vulkan::Buffer m_gaussianBuffer;
+    std::optional<vulkan::Buffer> m_gaussianIndexBuffer;
     std::optional<BuildResources> m_buildResources;
     std::vector<AccelerationStructure> m_blas;
     std::optional<AccelerationStructure> m_tlas;

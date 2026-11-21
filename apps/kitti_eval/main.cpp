@@ -196,6 +196,8 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
     sim::ScanTimings sum;
     double generateSum = 0.0;
     double bestTrace = 1.0e30;
+    std::vector<float> traceTimes;
+    traceTimes.reserve(poses.size());
     std::size_t totalHits = 0;
     std::size_t measuredFrames = 0;
 
@@ -247,6 +249,7 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
         sum.Readback += result.Timings.Readback;
         sum.Total += result.Timings.Total;
         bestTrace = std::min(bestTrace, result.Timings.Trace);
+        traceTimes.push_back(static_cast<float>(result.Timings.Trace));
     }
 
     const double frames = static_cast<double>(measuredFrames);
@@ -265,6 +268,8 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
               << "Average hits:       " << static_cast<double>(totalHits) / static_cast<double>(poses.size())
               << " points/frame\n"
               << "Best trace time:    " << bestTrace << " ms/frame\n"
+              << "Median trace time:  " << Percentile(traceTimes, 0.5) << " ms/frame\n"
+              << "P95 trace time:     " << Percentile(traceTimes, 0.95) << " ms/frame\n"
               << "Average per frame (" << measuredFrames << " frames"
               << (poses.size() > 1 ? ", first frame excluded" : "") << "):\n";
 
@@ -344,7 +349,8 @@ void RunMesh(const std::filesystem::path &shaderPath, const std::filesystem::pat
 }
 
 void RunGaussian(const std::filesystem::path &shaderPath, const std::filesystem::path &bundle, float sigmaCutoff,
-                 float alphaThreshold, const std::filesystem::path &outputDirectory, std::uint32_t hitBatchSize)
+                 float alphaThreshold, const std::filesystem::path &outputDirectory, std::uint32_t hitBatchSize,
+                 std::uint32_t blasGroupSizeLog2)
 {
     const auto loadStart = Clock::now();
     const auto poses = sim::LoadVelodynePoses(bundle / "camera" / "camera_params.json");
@@ -361,10 +367,12 @@ void RunGaussian(const std::filesystem::path &shaderPath, const std::filesystem:
               << "Loaded bundle in " << loadSeconds << " s\n";
 
     raylidar::vulkan::VulkanContext context;
+    std::cout << "Device:             " << context.PhysicalDeviceProperties().deviceName.data() << '\n';
     const auto buildStart = Clock::now();
     const raylidar::rt::GaussianSceneDescription sceneDescription{
         .Gaussians = gaussians,
         .SigmaCutoff = sigmaCutoff,
+        .BlasGroupSizeLog2 = blasGroupSizeLog2,
     };
     raylidar::rt::GaussianScene scene(context, sceneDescription);
     {
@@ -386,11 +394,13 @@ void RunGaussian(const std::filesystem::path &shaderPath, const std::filesystem:
         std::filesystem::create_directories(outputDirectory);
     }
 
-    EvaluateGtRays(gt, simulator.Scan(scene, gt.Rays, alphaThreshold), "2D Gaussian", origin, outputDirectory);
+    std::cout << "Gaussian BLASes:    " << scene.BlasCount() << " (up to " << scene.GaussiansPerBatch()
+              << " splats each)\n"
+              << "Scene build:        " << buildMs << " ms\n"
+              << "Tracing 2D Gaussians (in chunks)..." << std::endl;
 
-    std::cout << std::fixed << std::setprecision(3) << "Gaussians:       " << gaussians.size() << '\n'
-              << "Alpha threshold: " << alphaThreshold << '\n'
-              << "Scene build:     " << buildMs << " ms\n";
+    EvaluateGtRays(gt, sim::ScanGaussiansInChunks(simulator, scene, gt.Rays, alphaThreshold), "2D Gaussian", origin,
+                   outputDirectory);
 
     RunVelodyneScans(sensor, poses, origin, outputDirectory, "velodyne_gaussian_", {},
                      [&simulator, &scene, alphaThreshold](std::span<const raylidar::rt::Ray> rays) {
@@ -475,7 +485,8 @@ void PrintSummaryRow(std::string_view name, const sim::GtRays &gt, std::span<con
 // Mesh vs 2D Gaussian vs hybrid on the same GT rays and the same local frame.
 void RunCompare(const std::filesystem::path &meshShaderPath, const std::filesystem::path &gaussianShaderPath,
                 const std::filesystem::path &meshBundle, const std::filesystem::path &gaussianBundle, float sigmaCutoff,
-                float alphaThreshold, const std::filesystem::path &outputDirectory, std::uint32_t hitBatchSize)
+                float alphaThreshold, const std::filesystem::path &outputDirectory, std::uint32_t hitBatchSize,
+                std::uint32_t blasGroupSizeLog2)
 {
     const auto loadStart = Clock::now();
     const auto mesh = sim::PlyIO::LoadMesh(meshBundle / "mesh" / "mesh.ply");
@@ -512,6 +523,7 @@ void RunCompare(const std::filesystem::path &meshShaderPath, const std::filesyst
     const raylidar::rt::GaussianSceneDescription gaussianSceneDescription{
         .Gaussians = gaussians,
         .SigmaCutoff = sigmaCutoff,
+        .BlasGroupSizeLog2 = blasGroupSizeLog2,
     };
     raylidar::rt::GaussianScene gaussianScene(context, gaussianSceneDescription);
     {
@@ -526,6 +538,8 @@ void RunCompare(const std::filesystem::path &meshShaderPath, const std::filesyst
         meshScene.ReleaseUploadResources();
         gaussianScene.ReleaseUploadResources();
     }
+    std::cout << "Gaussian BLASes:    " << gaussianScene.BlasCount() << " (up to " << gaussianScene.GaussiansPerBatch()
+              << " splats each)\n";
 
     const sim::LidarSensor sensor(sim::LidarSensorDescription{});
     const auto capacity = static_cast<std::uint32_t>(std::max<std::size_t>(gt.Rays.size(), sensor.RayCount()));
@@ -649,10 +663,23 @@ int main(int argc, char *argv[])
         }
 
         std::uint32_t hitBatchSize = raylidar::rt::kDefaultGaussianHitBatchSize;
-        if ((mode == "--gaussian" || mode == "--compare") && argc >= 4 &&
-            std::string_view(argv[argc - 2]) == "--hit-batch-size")
+        std::uint32_t blasGroupSizeLog2 = raylidar::rt::kDefaultGaussianBlasGroupSizeLog2;
+        while ((mode == "--gaussian" || mode == "--compare") && argc >= 4)
         {
-            hitBatchSize = static_cast<std::uint32_t>(std::stoul(argv[argc - 1]));
+            const std::string_view flag = argv[argc - 2];
+            const std::string_view value = argv[argc - 1];
+            if (flag == "--hit-batch-size")
+            {
+                hitBatchSize = static_cast<std::uint32_t>(std::stoul(argv[argc - 1]));
+            }
+            else if (flag == "--gaussian-blas")
+            {
+                blasGroupSizeLog2 = value == "single" ? 0u : static_cast<std::uint32_t>(std::stoul(argv[argc - 1]));
+            }
+            else
+            {
+                break;
+            }
             argc -= 2;
         }
 
@@ -660,24 +687,29 @@ int main(int argc, char *argv[])
         {
             const float sigmaCutoff = std::stof(argv[4]);
             const float alphaThreshold = std::stof(argv[5]);
-            RunGaussian(argv[2], argv[3], sigmaCutoff, alphaThreshold, argc == 7 ? argv[6] : "", hitBatchSize);
+            RunGaussian(argv[2], argv[3], sigmaCutoff, alphaThreshold, argc == 7 ? argv[6] : "", hitBatchSize,
+                        blasGroupSizeLog2);
             return EXIT_SUCCESS;
         }
 
         if (mode == "--compare" && (argc == 8 || argc == 9))
         {
             RunCompare(argv[2], argv[3], argv[4], argv[5], std::stof(argv[6]), std::stof(argv[7]),
-                       argc == 9 ? argv[8] : "", hitBatchSize);
+                       argc == 9 ? argv[8] : "", hitBatchSize, blasGroupSizeLog2);
             return EXIT_SUCCESS;
         }
 
-        std::cerr << "Usage: raylidar_kitti_eval --mesh <LidarTrace.spv> <bundle_dir> [output_dir]\n"
-                  << "       raylidar_kitti_eval --gaussian <GaussianTrace.spv> <bundle_dir> "
-                     "<sigma_cutoff> <alpha_threshold> [output_dir] [--hit-batch-size <K>]\n"
-                  << "       raylidar_kitti_eval --compare <LidarTrace.spv> <GaussianTrace.spv> <mesh_bundle> "
-                     "<gaussian_bundle> <sigma_cutoff> <alpha_threshold> [output_dir] [--hit-batch-size <K>]\n"
-                  << "Gaussian hit batch size K is positive and defaults to "
-                  << raylidar::rt::kDefaultGaussianHitBatchSize << ".\n";
+        std::cerr
+            << "Usage: raylidar_kitti_eval --mesh <LidarTrace.spv> <bundle_dir> [output_dir]\n"
+            << "       raylidar_kitti_eval --gaussian <GaussianTrace.spv> <bundle_dir> "
+               "<sigma_cutoff> <alpha_threshold> [output_dir] [--hit-batch-size <K>] [--gaussian-blas <log2|single>]\n"
+            << "       raylidar_kitti_eval --compare <LidarTrace.spv> <GaussianTrace.spv> <mesh_bundle> "
+               "<gaussian_bundle> <sigma_cutoff> <alpha_threshold> [output_dir] [--hit-batch-size <K>] "
+               "[--gaussian-blas <log2|single>]\n"
+            << "Gaussian hit batch size K is positive and defaults to " << raylidar::rt::kDefaultGaussianHitBatchSize
+            << ".\n"
+            << "Gaussian BLAS defaults to single (also selected by 0). A positive log2 uses Morton groups of "
+               "2^log2 Gaussians.\n";
         return EXIT_FAILURE;
     }
     catch (const std::exception &exception)

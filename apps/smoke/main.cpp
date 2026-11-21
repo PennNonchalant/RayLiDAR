@@ -252,7 +252,7 @@ void RunComputeSmoke(const raylidar::vulkan::VulkanContext &context, const std::
 }
 
 void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const raylidar::vulkan::Shader &shader,
-                              std::uint32_t hitBatchSize)
+                              std::uint32_t hitBatchSize, std::uint32_t blasGroupSizeLog2)
 {
     std::vector<raylidar::rt::Gaussian> gaussians{
         {{0.0f, 0.0f, 2.0f}, 0.3f},  {{8.0f, 0.0f, 2.0f}, 0.3f},  {{8.125f, 0.0f, 2.0f}, 0.3f},
@@ -283,7 +283,7 @@ void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, co
         {64.0f, 0},
     }};
 
-    raylidar::rt::GaussianScene scene(context, {gaussians});
+    raylidar::rt::GaussianScene scene(context, {.Gaussians = gaussians, .BlasGroupSizeLog2 = blasGroupSizeLog2});
     raylidar::rt::ASBuilder builder(context);
     raylidar::rt::RayQueryTracer tracer(context, shader, raylidar::rt::RayQueryMode::Gaussian, hitBatchSize);
 
@@ -304,7 +304,7 @@ void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, co
     tracer.SetResources(scene, rayBuffer, hitBuffer);
 
     const raylidar::rt::GaussianTraceParameters parameters{
-        static_cast<std::uint32_t>(rays.size()), scene.GaussiansPerBatch(), scene.SigmaCutoff(), alphaThreshold};
+        static_cast<std::uint32_t>(rays.size()), scene.GaussianIndexStride(), scene.SigmaCutoff(), alphaThreshold};
     tracer.RecordTrace(commandBuffer, parameters);
     raylidar::vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eComputeShader,
                                           vk::AccessFlagBits2::eShaderStorageWrite, vk::PipelineStageFlagBits2::eHost,
@@ -365,7 +365,8 @@ int main(int argc, char *argv[])
             const raylidar::vulkan::Shader gaussianShader(context, argv[3]);
             for (const std::uint32_t size : {raylidar::rt::kDefaultGaussianHitBatchSize, 4u, 8u, 16u, 32u, 64u})
             {
-                RunGaussianRayQuerySmoke(context, gaussianShader, size);
+                RunGaussianRayQuerySmoke(context, gaussianShader, size, 0);
+                RunGaussianRayQuerySmoke(context, gaussianShader, size, 2);
             }
         }
 

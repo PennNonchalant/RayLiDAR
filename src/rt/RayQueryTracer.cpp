@@ -34,6 +34,8 @@ vulkan::ComputePipeline MakePipeline(const vulkan::VulkanContext &context, const
     description.PushConstantSize = sizeof(GaussianTraceParameters);
     description.DescriptorSets[0].Bindings.emplace_back(3, vk::DescriptorType::eStorageBuffer, 1,
                                                         vk::ShaderStageFlagBits::eCompute);
+    description.DescriptorSets[0].Bindings.emplace_back(4, vk::DescriptorType::eStorageBuffer, 1,
+                                                        vk::ShaderStageFlagBits::eCompute);
 
     const vk::SpecializationMapEntry batchSizeEntry(kGaussianHitBatchSizeConstantId, 0, sizeof(std::uint32_t));
     const vk::SpecializationInfo specialization(1, &batchSizeEntry, batchSizeEntry.size, &gaussianHitBatchSize);
@@ -58,6 +60,8 @@ void RayQueryTracer::SetResources(const GaussianScene &scene, const vulkan::Buff
 {
     WriteTraceBindings(scene.Tlas(), rays, hits);
     m_bindings.WriteBuffer(0, 3, scene.GaussianBuffer());
+    const auto &indices = scene.GaussianIndexBuffer();
+    m_bindings.WriteBuffer(0, 4, indices ? *indices : scene.GaussianBuffer());
 }
 
 void RayQueryTracer::RecordTrace(const vk::raii::CommandBuffer &commandBuffer, const MeshTraceParameters &parameters)

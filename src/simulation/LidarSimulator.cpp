@@ -172,7 +172,7 @@ ScanResult LidarSimulator::Scan(const rt::MeshScene &scene, std::span<const rt::
 ScanResult LidarSimulator::Scan(const rt::GaussianScene &scene, std::span<const rt::Ray> rays, float alphaThreshold)
 {
     const rt::GaussianTraceParameters parameters{
-        .GaussiansPerBatch = scene.GaussiansPerBatch(),
+        .GaussianIndexStride = scene.GaussianIndexStride(),
         .SigmaCutoff = scene.SigmaCutoff(),
         .AlphaThreshold = alphaThreshold,
     };
