@@ -35,7 +35,7 @@ enum class RayQueryMode
     Gaussian
 };
 
-inline constexpr std::uint32_t kDefaultGaussianHitBatchSize = 1;
+inline constexpr std::uint32_t kDefaultGaussianHitBatchSize = 16;
 
 class MeshScene;
 class GaussianScene;

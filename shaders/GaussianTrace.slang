@@ -1,5 +1,5 @@
 [vk::constant_id(0)]
-const uint kHitBatchSize = 1u;
+const uint kHitBatchSize = 16u;
 
 struct Ray
 {

@@ -363,7 +363,7 @@ int main(int argc, char *argv[])
             RunMeshRayQuerySmoke(context, argv[2]);
             RunComputeSmoke(context, argv[1]);
             const raylidar::vulkan::Shader gaussianShader(context, argv[3]);
-            for (const std::uint32_t size : {raylidar::rt::kDefaultGaussianHitBatchSize, 4u, 8u, 16u, 32u, 64u})
+            for (const std::uint32_t size : {1u, 4u, 8u, 16u, 32u, 64u})
             {
                 RunGaussianRayQuerySmoke(context, gaussianShader, size, 0);
                 RunGaussianRayQuerySmoke(context, gaussianShader, size, 2);
