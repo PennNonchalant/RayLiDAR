@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -56,7 +57,8 @@ struct Options
     float AlphaThreshold = 0.0f;
     rt::GaussianTraceOptions GaussianOptions;
     std::uint32_t BlasGroupSizeLog2 = rt::kDefaultGaussianBlasGroupSizeLog2;
-    bool GpuRayGen = false;
+    std::size_t GaussianChunkSize = 0;
+    bool GpuRayGen = true;
 };
 
 void PrintUsage(std::ostream &out)
@@ -66,11 +68,12 @@ void PrintUsage(std::ostream &out)
            " [output_dir] [options]\n"
         << "       raylidar_kitti_eval <--hybrid|--compare> <LidarTrace.spv> <GaussianTrace.spv> <mesh_bundle>"
            " <gaussian_bundle> <sigma_cutoff> <alpha_threshold> [output_dir] [options]\n"
-        << "  --ray-gen <cpu|gpu>             sweep ray generation (default cpu)\n"
+        << "  --ray-gen <cpu|gpu>             sweep ray generation (default gpu)\n"
         << "                                 gpu uses LidarRayGen.spv beside the first trace shader\n"
         << "Gaussian options (--gaussian, --hybrid, --compare):\n"
         << "  --hit-batch-size <K>            batch size (default " << rt::kDefaultGaussianHitBatchSize << ")\n"
         << "  --gaussian-blas <log2|single>   single (default) or 0 for one BLAS, positive log2 for Morton groups\n"
+        << "  --gaussian-chunk-size <rays>    maximum rays per Gaussian dispatch (default 0: all rays)\n"
         << "  --candidate-alpha-bound <on|off> tighten using a single candidate (default on)\n"
         << "  --prefix-alpha-bound <on|off>    tighten using a candidate prefix (default on)\n";
 }
@@ -140,6 +143,15 @@ std::optional<Options> ParseOptions(std::span<char *> args)
         {
             options.BlasGroupSizeLog2 = value == "single" ? 0u : static_cast<std::uint32_t>(std::stoul(args[next + 1]));
         }
+        else if (flag == "--gaussian-chunk-size")
+        {
+            const auto end = value.data() + value.size();
+            const auto [parsedEnd, error] = std::from_chars(value.data(), end, options.GaussianChunkSize);
+            if (error != std::errc{} || parsedEnd != end)
+            {
+                return std::nullopt;
+            }
+        }
         else if (flag == "--candidate-alpha-bound" && (value == "on" || value == "off"))
         {
             options.GaussianOptions.CandidateAlphaBound = value == "on";
@@ -161,13 +173,15 @@ std::optional<Options> ParseOptions(std::span<char *> args)
     return options;
 }
 
-void PrintGaussianConfiguration(const rt::GaussianScene &scene, const rt::GaussianTraceOptions &options)
+void PrintGaussianConfiguration(const rt::GaussianScene &scene, const Options &options)
 {
     std::cout << "Gaussian BLASes:    " << scene.BlasCount() << " (up to " << scene.GaussiansPerBatch()
               << " splats each)\n"
-              << "Gaussian trace:     K=" << options.HitBatchSize
-              << ", candidate alpha bound=" << (options.CandidateAlphaBound ? "on" : "off")
-              << ", prefix alpha bound=" << (options.PrefixAlphaBound ? "on" : "off") << '\n';
+              << "Gaussian trace:     K=" << options.GaussianOptions.HitBatchSize
+              << ", candidate alpha bound=" << (options.GaussianOptions.CandidateAlphaBound ? "on" : "off")
+              << ", prefix alpha bound=" << (options.GaussianOptions.PrefixAlphaBound ? "on" : "off") << '\n'
+              << "Gaussian chunk size: "
+              << (options.GaussianChunkSize == 0 ? "all" : std::to_string(options.GaussianChunkSize)) << '\n';
 }
 
 void RunEvaluation(const Options &options)
@@ -273,7 +287,7 @@ void RunEvaluation(const Options &options)
         {
             gaussianSimulator->EnableGpuRayGeneration(rayGenShader, sensor);
         }
-        PrintGaussianConfiguration(*gaussianScene, options.GaussianOptions);
+        PrintGaussianConfiguration(*gaussianScene, options);
     }
     const auto buildMs = std::chrono::duration<double, std::milli>(Clock::now() - buildStart).count();
     std::cout << "Scene and pipeline setup: " << buildMs << " ms\n";
@@ -286,12 +300,13 @@ void RunEvaluation(const Options &options)
     std::optional<sim::HybridScanner> hybrid;
     if (meshSimulator && gaussianSimulator)
     {
-        hybrid.emplace(*meshSimulator, *gaussianSimulator);
+        hybrid.emplace(*meshSimulator, *gaussianSimulator, options.GaussianChunkSize);
     }
 
     const auto traceMesh = [&](std::span<const rt::Ray> rays) { return meshSimulator->Scan(*meshScene, rays); };
     const auto traceGaussian = [&](std::span<const rt::Ray> rays) {
-        return sim::ScanGaussiansInChunks(*gaussianSimulator, *gaussianScene, rays, options.AlphaThreshold);
+        return sim::ScanGaussians(*gaussianSimulator, *gaussianScene, rays, options.AlphaThreshold,
+                                  options.GaussianChunkSize);
     };
     const auto traceHybrid = [&](std::span<const rt::Ray> rays) {
         return hybrid->Scan(*meshScene, *gaussianScene, rays, options.AlphaThreshold);
@@ -336,10 +351,11 @@ void RunEvaluation(const Options &options)
     {
         runSweeps("Gaussian only", compare ? "gaussian_" : "velodyne_gaussian_",
                   [&](const sim::Transform &sensorToWorld, std::span<const rt::Ray> rays) {
-                      auto result = options.GpuRayGen
-                                        ? sim::ScanGaussiansInChunks(*gaussianSimulator, *gaussianScene,
-                                                                     {sensor, sensorToWorld}, options.AlphaThreshold)
-                                        : traceGaussian(rays);
+                      auto result =
+                          options.GpuRayGen
+                              ? sim::ScanGaussians(*gaussianSimulator, *gaussianScene, {sensor, sensorToWorld},
+                                                   options.AlphaThreshold, options.GaussianChunkSize)
+                              : traceGaussian(rays);
                       auto sources = sim::SourcesFor(result.Hits, sim::HitSource::Gaussian);
                       return kitti::FrameScan{std::move(result), std::move(sources)};
                   });

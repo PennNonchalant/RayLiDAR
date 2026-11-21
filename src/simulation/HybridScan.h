@@ -33,16 +33,13 @@ struct HybridScanResult
     double GaussianMilliseconds = 0.0; // CPU wall time of the Gaussian pass
 };
 
-inline constexpr std::size_t kGaussianRaysPerChunk = 32768;
+[[nodiscard]]
+ScanResult ScanGaussians(LidarSimulator &simulator, const rt::GaussianScene &scene, std::span<const rt::Ray> rays,
+                         float alphaThreshold, std::size_t raysPerChunk = 0);
 
 [[nodiscard]]
-ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianScene &scene,
-                                 std::span<const rt::Ray> rays, float alphaThreshold,
-                                 std::size_t raysPerChunk = kGaussianRaysPerChunk);
-
-[[nodiscard]]
-ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianScene &scene, const SensorRays &rays,
-                                 float alphaThreshold, std::size_t raysPerChunk = kGaussianRaysPerChunk);
+ScanResult ScanGaussians(LidarSimulator &simulator, const rt::GaussianScene &scene, const SensorRays &rays,
+                         float alphaThreshold, std::size_t raysPerChunk = 0);
 
 // Ground-truth-free hybrid routing.
 // Every ray is traced against the mesh first: the mesh is the most accurate where it exists and is ~1000x cheaper.
@@ -51,7 +48,7 @@ ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianSc
 class HybridScanner
 {
   public:
-    HybridScanner(LidarSimulator &meshSimulator, LidarSimulator &gaussianSimulator);
+    HybridScanner(LidarSimulator &meshSimulator, LidarSimulator &gaussianSimulator, std::size_t gaussianChunkSize = 0);
 
     // untrustedTriangles: one entry per mesh triangle, non-zero = route to Gaussians. Empty = trust every triangle.
     // Measured on KITTI-360 4615-4674: routing untrusted triangles (TriangleTrust.h) made accuracy worse, because the
@@ -69,5 +66,6 @@ class HybridScanner
   private:
     LidarSimulator &m_meshSimulator;
     LidarSimulator &m_gaussianSimulator;
+    std::size_t m_gaussianChunkSize;
 };
 } // namespace raylidar::simulation

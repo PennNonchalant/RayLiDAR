@@ -23,6 +23,15 @@ bool IsUntrusted(const rt::Hit &hit, std::span<const std::uint8_t> untrustedTria
 template <typename ScanChunk>
 ScanResult ScanInChunks(std::size_t rayCount, std::size_t raysPerChunk, const ScanChunk &scanChunk)
 {
+    if (rayCount == 0)
+    {
+        return {};
+    }
+    if (raysPerChunk == 0 || raysPerChunk >= rayCount)
+    {
+        return scanChunk(0, rayCount);
+    }
+
     const auto scanStart = Clock::now();
     ScanResult combined;
     combined.Hits.reserve(rayCount);
@@ -44,7 +53,7 @@ ScanResult ScanInChunks(std::size_t rayCount, std::size_t raysPerChunk, const Sc
 
 template <typename ScanMesh, typename SelectRays>
 HybridScanResult ScanHybrid(LidarSimulator &gaussianSimulator, const rt::GaussianScene &gaussianScene,
-                            std::size_t rayCount, float alphaThreshold,
+                            std::size_t rayCount, float alphaThreshold, std::size_t gaussianChunkSize,
                             std::span<const std::uint8_t> untrustedTriangles, const ScanMesh &scanMesh,
                             const SelectRays &selectRays)
 {
@@ -78,7 +87,8 @@ HybridScanResult ScanHybrid(LidarSimulator &gaussianSimulator, const rt::Gaussia
         const auto gaussianRays = selectRays(std::span<const std::uint32_t>(gaussianIndices));
         const auto gaussianStart = Clock::now();
         output.RoutingMilliseconds = MillisecondsSince(routeStart);
-        gaussianResult = ScanGaussiansInChunks(gaussianSimulator, gaussianScene, gaussianRays, alphaThreshold);
+        gaussianResult =
+            ScanGaussians(gaussianSimulator, gaussianScene, gaussianRays, alphaThreshold, gaussianChunkSize);
         output.GaussianMilliseconds = MillisecondsSince(gaussianStart);
         output.Result.Timings += gaussianResult.Timings;
     }
@@ -133,24 +143,25 @@ HybridScanResult ScanHybrid(LidarSimulator &gaussianSimulator, const rt::Gaussia
 }
 } // namespace
 
-ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianScene &scene,
-                                 std::span<const rt::Ray> rays, float alphaThreshold, std::size_t raysPerChunk)
+ScanResult ScanGaussians(LidarSimulator &simulator, const rt::GaussianScene &scene, std::span<const rt::Ray> rays,
+                         float alphaThreshold, std::size_t raysPerChunk)
 {
     return ScanInChunks(rays.size(), raysPerChunk, [&](std::size_t first, std::size_t count) {
         return simulator.Scan(scene, rays.subspan(first, count), alphaThreshold);
     });
 }
 
-ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianScene &scene, const SensorRays &rays,
-                                 float alphaThreshold, std::size_t raysPerChunk)
+ScanResult ScanGaussians(LidarSimulator &simulator, const rt::GaussianScene &scene, const SensorRays &rays,
+                         float alphaThreshold, std::size_t raysPerChunk)
 {
     return ScanInChunks(rays.Count(), raysPerChunk, [&](std::size_t first, std::size_t count) {
         return simulator.Scan(scene, rays, alphaThreshold, first, count);
     });
 }
 
-HybridScanner::HybridScanner(LidarSimulator &meshSimulator, LidarSimulator &gaussianSimulator)
-    : m_meshSimulator(meshSimulator), m_gaussianSimulator(gaussianSimulator)
+HybridScanner::HybridScanner(LidarSimulator &meshSimulator, LidarSimulator &gaussianSimulator,
+                             std::size_t gaussianChunkSize)
+    : m_meshSimulator(meshSimulator), m_gaussianSimulator(gaussianSimulator), m_gaussianChunkSize(gaussianChunkSize)
 {
 }
 
@@ -159,7 +170,7 @@ HybridScanResult HybridScanner::Scan(const rt::MeshScene &meshScene, const rt::G
                                      std::span<const std::uint8_t> untrustedTriangles)
 {
     return ScanHybrid(
-        m_gaussianSimulator, gaussianScene, rays.size(), alphaThreshold, untrustedTriangles,
+        m_gaussianSimulator, gaussianScene, rays.size(), alphaThreshold, m_gaussianChunkSize, untrustedTriangles,
         [&] { return m_meshSimulator.Scan(meshScene, rays); },
         [rays](std::span<const std::uint32_t> indices) {
             std::vector<rt::Ray> selected;
@@ -177,7 +188,7 @@ HybridScanResult HybridScanner::Scan(const rt::MeshScene &meshScene, const rt::G
                                      std::span<const std::uint8_t> untrustedTriangles)
 {
     return ScanHybrid(
-        m_gaussianSimulator, gaussianScene, sensor.RayCount(), alphaThreshold, untrustedTriangles,
+        m_gaussianSimulator, gaussianScene, sensor.RayCount(), alphaThreshold, m_gaussianChunkSize, untrustedTriangles,
         [&] { return m_meshSimulator.Scan(meshScene, sensor, sensorToWorld); },
         [&](std::span<const std::uint32_t> indices) { return SensorRays{sensor, sensorToWorld, indices}; });
 }
