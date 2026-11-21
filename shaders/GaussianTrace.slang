@@ -72,6 +72,25 @@ float ResumeTMin(float currentMin, float hardwareT)
     return hardwareT > currentMin ? max(currentMin, asfloat(asuint(hardwareT) - 1u)) : currentMin;
 }
 
+float CumulativeAlphaBound(GaussianCandidate candidates[kHitBatchSize], uint candidateCount, float accumulatedAlpha,
+                           float tMax)
+{
+    for (uint slot = 0; slot < candidateCount; ++slot)
+    {
+        GaussianCandidate candidate = candidates[slot];
+        if (candidate.T >= tMax)
+        {
+            break;
+        }
+        accumulatedAlpha += (1.0f - accumulatedAlpha) * candidate.Alpha;
+        if (accumulatedAlpha >= parameters.AlphaThreshold)
+        {
+            return candidate.T;
+        }
+    }
+    return tMax;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
@@ -142,6 +161,7 @@ void main(uint3 id : SV_DispatchThreadID)
             }
             float alpha = gaussians[gaussianIndex].Opacity * exp(-0.5f * radiusSquared);
 
+            uint previousCandidateCount = candidateCount;
             uint slot = 0;
             while (slot < candidateCount && candidates[slot].GaussianIndex != gaussianIndex)
             {
@@ -186,6 +206,11 @@ void main(uint3 id : SV_DispatchThreadID)
             if (candidateCount == kHitBatchSize)
             {
                 batchTMax = min(batchTMax, candidates[kHitBatchSize - 1].T);
+            }
+            if (candidateCount > 1u && candidateCount > previousCandidateCount &&
+                ((candidateCount & (candidateCount - 1u)) == 0u || candidateCount == kHitBatchSize))
+            {
+                batchTMax = CumulativeAlphaBound(candidates, candidateCount, accumulatedAlpha, batchTMax);
             }
         }
 
