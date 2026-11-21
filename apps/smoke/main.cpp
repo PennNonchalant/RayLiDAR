@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -250,36 +251,41 @@ void RunComputeSmoke(const raylidar::vulkan::VulkanContext &context, const std::
     }
 }
 
-void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const std::filesystem::path &shaderPath)
+void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const raylidar::vulkan::Shader &shader,
+                              std::uint32_t hitBatchSize)
 {
-    constexpr std::array<raylidar::rt::Gaussian, 6> gaussians{{
-        {{0.0f, 0.0f, 2.0f}, 0.3f},
-        {{8.0f, 0.0f, 2.0f}, 0.3f},
-        {{8.125f, 0.0f, 2.0f}, 0.3f},
-        {{16.0f, 0.0f, 4.0f}, 0.3f},
-        {{16.0f, 0.0f, 2.0f}, 0.3f},
-        {{24.0f, 0.0f, 2.0f}, 0.5f},
-    }};
+    std::vector<raylidar::rt::Gaussian> gaussians{
+        {{0.0f, 0.0f, 2.0f}, 0.3f},  {{8.0f, 0.0f, 2.0f}, 0.3f},  {{8.125f, 0.0f, 2.0f}, 0.3f},
+        {{16.0f, 0.0f, 4.0f}, 0.3f}, {{16.0f, 0.0f, 2.0f}, 0.3f}, {{24.0f, 0.0f, 2.0f}, 0.5f},
+    };
+    for (int depth = 1; depth <= 80; ++depth)
+    {
+        gaussians.push_back({{32.0f, 0.0f, static_cast<float>(depth)}, 0.01f});
+    }
 
     constexpr float tMax = 10.0f;
     constexpr float alphaThreshold = 0.5f;
-    constexpr std::array<raylidar::rt::Ray, 4> rays{{
+    constexpr float distanceTolerance = 1.0e-4f;
+    constexpr std::array<raylidar::rt::Ray, 6> rays{{
         {.Origin = {0.0f, 0.0f, 0.0f}, .TMax = tMax},
         {.Origin = {8.0625f, 0.0f, 0.0f}, .TMax = tMax},
         {.Origin = {16.0f, 0.0f, 0.0f}, .TMax = tMax},
         {.Origin = {24.0f, 0.0f, 0.0f}, .TMax = tMax},
+        {.Origin = {32.0f, 0.0f, 0.0f}, .TMax = 100.0f},
+        {.Origin = {32.0f, 0.0f, 0.0f}, .TMax = 64.0f},
     }};
     constexpr std::array<raylidar::rt::Hit, rays.size()> expectedHits{{
         {tMax, 0},
         {2.0f, 1},
         {4.0f, 1},
         {2.0f, 1},
+        {69.0f, 1},
+        {64.0f, 0},
     }};
 
     raylidar::rt::GaussianScene scene(context, {gaussians});
     raylidar::rt::ASBuilder builder(context);
-    const raylidar::vulkan::Shader shader(context, shaderPath);
-    raylidar::rt::RayQueryTracer tracer(context, shader, raylidar::rt::RayQueryMode::Gaussian);
+    raylidar::rt::RayQueryTracer tracer(context, shader, raylidar::rt::RayQueryMode::Gaussian, hitBatchSize);
 
     const auto rayBytes = std::as_bytes(std::span(rays));
     const auto storageUsage = vk::BufferUsageFlagBits::eStorageBuffer;
@@ -311,13 +317,19 @@ void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, co
     hitBuffer.Read(hitBytes);
     for (std::size_t index = 0; index < hits.size(); ++index)
     {
-        if (hits[index].Valid != expectedHits[index].Valid || hits[index].T != expectedHits[index].T)
+        const auto &hit = hits[index];
+        const auto &expectedHit = expectedHits[index];
+        const bool distanceMatches = std::abs(hit.T - expectedHit.T) <= distanceTolerance;
+        if (hit.Valid != expectedHit.Valid || !distanceMatches)
         {
-            throw std::runtime_error("Gaussian ray query smoke failed at ray " + std::to_string(index) + ".");
+            throw std::runtime_error("Gaussian ray query smoke failed for K=" + std::to_string(hitBatchSize) +
+                                     " at ray " + std::to_string(index) + ". Expected Valid=" +
+                                     std::to_string(expectedHit.Valid) + ", T=" + std::to_string(expectedHit.T) +
+                                     ", got Valid=" + std::to_string(hit.Valid) + ", T=" + std::to_string(hit.T) + ".");
         }
     }
 
-    std::cout << "Gaussian ray query smoke passed.\n";
+    std::cout << "Gaussian ray query smoke passed (K=" << hitBatchSize << ").\n";
 }
 } // namespace
 
@@ -350,7 +362,11 @@ int main(int argc, char *argv[])
 
             RunMeshRayQuerySmoke(context, argv[2]);
             RunComputeSmoke(context, argv[1]);
-            RunGaussianRayQuerySmoke(context, argv[3]);
+            const raylidar::vulkan::Shader gaussianShader(context, argv[3]);
+            for (const std::uint32_t size : {raylidar::rt::kDefaultGaussianHitBatchSize, 4u, 8u, 16u, 32u, 64u})
+            {
+                RunGaussianRayQuerySmoke(context, gaussianShader, size);
+            }
         }
 
         std::cout << "Vulkan smoke completed\n";

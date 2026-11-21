@@ -50,7 +50,8 @@ class LidarSimulator
 {
   public:
     LidarSimulator(const vulkan::VulkanContext &context, const std::filesystem::path &traceShaderPath,
-                   std::uint32_t maxRayCount, rt::RayQueryMode mode = rt::RayQueryMode::Mesh);
+                   std::uint32_t maxRayCount, rt::RayQueryMode mode = rt::RayQueryMode::Mesh,
+                   std::uint32_t gaussianHitBatchSize = rt::kDefaultGaussianHitBatchSize);
 
     LidarSimulator(const LidarSimulator &) = delete;
     LidarSimulator &operator=(const LidarSimulator &) = delete;

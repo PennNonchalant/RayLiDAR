@@ -35,6 +35,8 @@ enum class RayQueryMode
     Gaussian
 };
 
+inline constexpr std::uint32_t kDefaultGaussianHitBatchSize = 1;
+
 class MeshScene;
 class GaussianScene;
 
@@ -42,7 +44,8 @@ class RayQueryTracer
 {
   public:
     RayQueryTracer(const vulkan::VulkanContext &context, const vulkan::Shader &shader,
-                   RayQueryMode mode = RayQueryMode::Mesh);
+                   RayQueryMode mode = RayQueryMode::Mesh,
+                   std::uint32_t gaussianHitBatchSize = kDefaultGaussianHitBatchSize);
     ~RayQueryTracer() = default;
 
     RayQueryTracer(const RayQueryTracer &) = delete;

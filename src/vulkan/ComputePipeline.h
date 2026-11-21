@@ -22,6 +22,7 @@ struct ComputePipelineDescription
     std::string EntryPoint = "main";
     std::vector<DescriptorSetDescription> DescriptorSets;
     std::uint32_t PushConstantSize = 0;
+    const vk::SpecializationInfo *SpecializationInfo = nullptr;
 };
 
 class ComputePipeline

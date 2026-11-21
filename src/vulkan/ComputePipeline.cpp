@@ -65,7 +65,8 @@ void ComputePipeline::Initialize(const VulkanContext &context, const Shader &sha
     vk::PipelineShaderStageCreateInfo stageInformation;
     stageInformation.setStage(vk::ShaderStageFlagBits::eCompute)
         .setModule(shader.Handle())
-        .setPName(description.EntryPoint.c_str());
+        .setPName(description.EntryPoint.c_str())
+        .setPSpecializationInfo(description.SpecializationInfo);
 
     vk::ComputePipelineCreateInfo pipelineInformation;
     pipelineInformation.setStage(stageInformation).setLayout(*m_pipelineLayout);

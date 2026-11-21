@@ -1,8 +1,5 @@
-#ifndef RAYLIDAR_GAUSSIAN_BATCH_SIZE
-#define RAYLIDAR_GAUSSIAN_BATCH_SIZE 1
-#endif
-
-static const uint kHitBatchSize = RAYLIDAR_GAUSSIAN_BATCH_SIZE;
+[vk::constant_id(0)]
+const uint kHitBatchSize = 1u;
 
 struct Ray
 {

@@ -7,16 +7,15 @@
 #include "vulkan/Buffer.h"
 #include "vulkan/VulkanContext.h"
 
-#include <algorithm>
-#include <stdexcept>
-
 namespace raylidar::rt
 {
 namespace
 {
 constexpr std::uint32_t kWorkgroupSize = 64;
+constexpr std::uint32_t kGaussianHitBatchSizeConstantId = 0;
 
-vulkan::ComputePipelineDescription MakePipelineDescription(RayQueryMode mode)
+vulkan::ComputePipeline MakePipeline(const vulkan::VulkanContext &context, const vulkan::Shader &shader,
+                                     RayQueryMode mode, std::uint32_t gaussianHitBatchSize)
 {
     vulkan::ComputePipelineDescription description;
     description.DescriptorSets.resize(1);
@@ -29,19 +28,24 @@ vulkan::ComputePipelineDescription MakePipelineDescription(RayQueryMode mode)
     if (mode == RayQueryMode::Mesh)
     {
         description.PushConstantSize = sizeof(MeshTraceParameters);
+        return {context, shader, description};
     }
-    else
-    {
-        description.PushConstantSize = sizeof(GaussianTraceParameters);
-        description.DescriptorSets[0].Bindings.emplace_back(3, vk::DescriptorType::eStorageBuffer, 1,
-                                                            vk::ShaderStageFlagBits::eCompute);
-    }
-    return description;
+
+    description.PushConstantSize = sizeof(GaussianTraceParameters);
+    description.DescriptorSets[0].Bindings.emplace_back(3, vk::DescriptorType::eStorageBuffer, 1,
+                                                        vk::ShaderStageFlagBits::eCompute);
+
+    const vk::SpecializationMapEntry batchSizeEntry(kGaussianHitBatchSizeConstantId, 0, sizeof(std::uint32_t));
+    const vk::SpecializationInfo specialization(1, &batchSizeEntry, batchSizeEntry.size, &gaussianHitBatchSize);
+    description.SpecializationInfo = &specialization;
+    return {context, shader, description};
 }
 } // namespace
 
-RayQueryTracer::RayQueryTracer(const vulkan::VulkanContext &context, const vulkan::Shader &shader, RayQueryMode mode)
-    : m_context(context), m_pipeline(context, shader, MakePipelineDescription(mode)), m_bindings(context, m_pipeline)
+RayQueryTracer::RayQueryTracer(const vulkan::VulkanContext &context, const vulkan::Shader &shader, RayQueryMode mode,
+                               std::uint32_t gaussianHitBatchSize)
+    : m_context(context), m_pipeline(MakePipeline(context, shader, mode, gaussianHitBatchSize)),
+      m_bindings(context, m_pipeline)
 {
 }
 
