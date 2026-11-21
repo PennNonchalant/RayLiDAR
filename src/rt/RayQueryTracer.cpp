@@ -7,15 +7,19 @@
 #include "vulkan/Buffer.h"
 #include "vulkan/VulkanContext.h"
 
+#include <array>
+
 namespace raylidar::rt
 {
 namespace
 {
 constexpr std::uint32_t kWorkgroupSize = 64;
 constexpr std::uint32_t kGaussianHitBatchSizeConstantId = 0;
+constexpr std::uint32_t kCandidateAlphaBoundConstantId = 1;
+constexpr std::uint32_t kPrefixAlphaBoundConstantId = 2;
 
 vulkan::ComputePipeline MakePipeline(const vulkan::VulkanContext &context, const vulkan::Shader &shader,
-                                     RayQueryMode mode, std::uint32_t gaussianHitBatchSize)
+                                     RayQueryMode mode, GaussianTraceOptions gaussianOptions)
 {
     vulkan::ComputePipelineDescription description;
     description.DescriptorSets.resize(1);
@@ -37,16 +41,27 @@ vulkan::ComputePipeline MakePipeline(const vulkan::VulkanContext &context, const
     description.DescriptorSets[0].Bindings.emplace_back(4, vk::DescriptorType::eStorageBuffer, 1,
                                                         vk::ShaderStageFlagBits::eCompute);
 
-    const vk::SpecializationMapEntry batchSizeEntry(kGaussianHitBatchSizeConstantId, 0, sizeof(std::uint32_t));
-    const vk::SpecializationInfo specialization(1, &batchSizeEntry, batchSizeEntry.size, &gaussianHitBatchSize);
+    constexpr std::uint32_t wordSize = sizeof(std::uint32_t);
+    const std::array entries{
+        vk::SpecializationMapEntry{kGaussianHitBatchSizeConstantId, 0, wordSize},
+        vk::SpecializationMapEntry{kCandidateAlphaBoundConstantId, wordSize, sizeof(vk::Bool32)},
+        vk::SpecializationMapEntry{kPrefixAlphaBoundConstantId, 2 * wordSize, sizeof(vk::Bool32)},
+    };
+    const std::array<std::uint32_t, 3> values{
+        gaussianOptions.HitBatchSize,
+        gaussianOptions.CandidateAlphaBound ? VK_TRUE : VK_FALSE,
+        gaussianOptions.PrefixAlphaBound ? VK_TRUE : VK_FALSE,
+    };
+    const vk::SpecializationInfo specialization(static_cast<std::uint32_t>(entries.size()), entries.data(),
+                                                sizeof(values), values.data());
     description.SpecializationInfo = &specialization;
     return {context, shader, description};
 }
 } // namespace
 
 RayQueryTracer::RayQueryTracer(const vulkan::VulkanContext &context, const vulkan::Shader &shader, RayQueryMode mode,
-                               std::uint32_t gaussianHitBatchSize)
-    : m_context(context), m_pipeline(MakePipeline(context, shader, mode, gaussianHitBatchSize)),
+                               GaussianTraceOptions gaussianOptions)
+    : m_context(context), m_pipeline(MakePipeline(context, shader, mode, gaussianOptions)),
       m_bindings(context, m_pipeline)
 {
 }

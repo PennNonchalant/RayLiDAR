@@ -252,7 +252,7 @@ void RunComputeSmoke(const raylidar::vulkan::VulkanContext &context, const std::
 }
 
 void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const raylidar::vulkan::Shader &shader,
-                              std::uint32_t hitBatchSize, std::uint32_t blasGroupSizeLog2)
+                              raylidar::rt::GaussianTraceOptions options, std::uint32_t blasGroupSizeLog2)
 {
     std::vector<raylidar::rt::Gaussian> gaussians{
         {{0.0f, 0.0f, 2.0f}, 0.3f},  {{8.0f, 0.0f, 2.0f}, 0.3f},  {{8.125f, 0.0f, 2.0f}, 0.3f},
@@ -285,7 +285,7 @@ void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, co
 
     raylidar::rt::GaussianScene scene(context, {.Gaussians = gaussians, .BlasGroupSizeLog2 = blasGroupSizeLog2});
     raylidar::rt::ASBuilder builder(context);
-    raylidar::rt::RayQueryTracer tracer(context, shader, raylidar::rt::RayQueryMode::Gaussian, hitBatchSize);
+    raylidar::rt::RayQueryTracer tracer(context, shader, raylidar::rt::RayQueryMode::Gaussian, options);
 
     const auto rayBytes = std::as_bytes(std::span(rays));
     const auto storageUsage = vk::BufferUsageFlagBits::eStorageBuffer;
@@ -322,14 +322,14 @@ void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, co
         const bool distanceMatches = std::abs(hit.T - expectedHit.T) <= distanceTolerance;
         if (hit.Valid != expectedHit.Valid || !distanceMatches)
         {
-            throw std::runtime_error("Gaussian ray query smoke failed for K=" + std::to_string(hitBatchSize) +
+            throw std::runtime_error("Gaussian ray query smoke failed for K=" + std::to_string(options.HitBatchSize) +
                                      " at ray " + std::to_string(index) + ". Expected Valid=" +
                                      std::to_string(expectedHit.Valid) + ", T=" + std::to_string(expectedHit.T) +
                                      ", got Valid=" + std::to_string(hit.Valid) + ", T=" + std::to_string(hit.T) + ".");
         }
     }
 
-    std::cout << "Gaussian ray query smoke passed (K=" << hitBatchSize << ").\n";
+    std::cout << "Gaussian ray query smoke passed (K=" << options.HitBatchSize << ").\n";
 }
 } // namespace
 
@@ -365,9 +365,13 @@ int main(int argc, char *argv[])
             const raylidar::vulkan::Shader gaussianShader(context, argv[3]);
             for (const std::uint32_t size : {1u, 4u, 8u, 16u, 32u, 64u})
             {
-                RunGaussianRayQuerySmoke(context, gaussianShader, size, 0);
-                RunGaussianRayQuerySmoke(context, gaussianShader, size, 2);
+                RunGaussianRayQuerySmoke(context, gaussianShader, {.HitBatchSize = size}, 0);
+                RunGaussianRayQuerySmoke(context, gaussianShader, {.HitBatchSize = size}, 2);
             }
+            RunGaussianRayQuerySmoke(context, gaussianShader, {.CandidateAlphaBound = false}, 0);
+            RunGaussianRayQuerySmoke(context, gaussianShader, {.PrefixAlphaBound = false}, 0);
+            RunGaussianRayQuerySmoke(context, gaussianShader, {.CandidateAlphaBound = false, .PrefixAlphaBound = false},
+                                     0);
         }
 
         std::cout << "Vulkan smoke completed\n";

@@ -1,6 +1,12 @@
 [vk::constant_id(0)]
 const uint kHitBatchSize = 16u;
 
+[vk::constant_id(1)]
+const bool kCandidateAlphaBound = true;
+
+[vk::constant_id(2)]
+const bool kPrefixAlphaBound = true;
+
 struct Ray
 {
     float3 Origin;
@@ -199,7 +205,8 @@ void main(uint3 id : SV_DispatchThreadID)
             }
             candidates[slot] = {t, gaussianIndex, alpha};
 
-            if (accumulatedAlpha + (1.0f - accumulatedAlpha) * alpha >= parameters.AlphaThreshold)
+            if (kCandidateAlphaBound &&
+                accumulatedAlpha + (1.0f - accumulatedAlpha) * alpha >= parameters.AlphaThreshold)
             {
                 batchTMax = min(batchTMax, t);
             }
@@ -207,7 +214,7 @@ void main(uint3 id : SV_DispatchThreadID)
             {
                 batchTMax = min(batchTMax, candidates[kHitBatchSize - 1].T);
             }
-            if (candidateCount > 1u && candidateCount > previousCandidateCount &&
+            if (kPrefixAlphaBound && candidateCount > 1u && candidateCount > previousCandidateCount &&
                 ((candidateCount & (candidateCount - 1u)) == 0u || candidateCount == kHitBatchSize))
             {
                 batchTMax = CumulativeAlphaBound(candidates, candidateCount, accumulatedAlpha, batchTMax);

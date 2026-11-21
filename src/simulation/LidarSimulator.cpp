@@ -36,9 +36,10 @@ vulkan::BufferDescription MakeBufferDescription(vk::DeviceSize size, vk::BufferU
 } // namespace
 
 LidarSimulator::LidarSimulator(const vulkan::VulkanContext &context, const std::filesystem::path &traceShaderPath,
-                               std::uint32_t maxRayCount, rt::RayQueryMode mode, std::uint32_t gaussianHitBatchSize)
+                               std::uint32_t maxRayCount, rt::RayQueryMode mode,
+                               rt::GaussianTraceOptions gaussianOptions)
     : m_context(context), m_maxRayCount(maxRayCount), m_shader(context, traceShaderPath),
-      m_tracer(context, m_shader, mode, gaussianHitBatchSize),
+      m_tracer(context, m_shader, mode, gaussianOptions),
       m_rayBuffer(context, MakeBufferDescription(maxRayCount * sizeof(rt::Ray), vk::BufferUsageFlagBits::eStorageBuffer,
                                                  vulkan::BufferMemoryUsage::Upload)),
       m_hitBuffer(context,
