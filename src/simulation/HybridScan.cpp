@@ -14,41 +14,139 @@ double MillisecondsSince(Clock::time_point start)
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
-void AddTimings(ScanTimings &sum, const ScanTimings &part)
-{
-    sum.Upload += part.Upload;
-    sum.Trace += part.Trace;
-    sum.CopyHits += part.CopyHits;
-    sum.SubmitWait += part.SubmitWait;
-    sum.Readback += part.Readback;
-}
-
 bool IsUntrusted(const rt::Hit &hit, std::span<const std::uint8_t> untrustedTriangles)
 {
     return !untrustedTriangles.empty() && hit.PrimitiveId < untrustedTriangles.size() &&
            untrustedTriangles[hit.PrimitiveId] != 0;
+}
+
+template <typename ScanChunk>
+ScanResult ScanInChunks(std::size_t rayCount, std::size_t raysPerChunk, const ScanChunk &scanChunk)
+{
+    const auto scanStart = Clock::now();
+    ScanResult combined;
+    combined.Hits.reserve(rayCount);
+    combined.Points.reserve(rayCount);
+
+    for (std::size_t first = 0; first < rayCount; first += raysPerChunk)
+    {
+        const auto count = std::min(raysPerChunk, rayCount - first);
+        auto chunk = scanChunk(first, count);
+
+        combined.Hits.insert(combined.Hits.end(), chunk.Hits.begin(), chunk.Hits.end());
+        combined.Points.insert(combined.Points.end(), chunk.Points.begin(), chunk.Points.end());
+        combined.Timings += chunk.Timings;
+    }
+
+    combined.Timings.Total = MillisecondsSince(scanStart);
+    return combined;
+}
+
+template <typename ScanMesh, typename SelectRays>
+HybridScanResult ScanHybrid(LidarSimulator &gaussianSimulator, const rt::GaussianScene &gaussianScene,
+                            std::size_t rayCount, float alphaThreshold,
+                            std::span<const std::uint8_t> untrustedTriangles, const ScanMesh &scanMesh,
+                            const SelectRays &selectRays)
+{
+    const auto scanStart = Clock::now();
+    HybridScanResult output;
+
+    const auto meshStart = Clock::now();
+    auto meshResult = scanMesh();
+    output.MeshMilliseconds = MillisecondsSince(meshStart);
+    output.Result.Timings += meshResult.Timings;
+
+    auto routeStart = Clock::now();
+    std::vector<std::uint32_t> gaussianIndices;
+
+    for (std::size_t index = 0; index < rayCount; ++index)
+    {
+        const auto &hit = meshResult.Hits[index];
+
+        if (hit.Valid == 0 || IsUntrusted(hit, untrustedTriangles))
+        {
+            gaussianIndices.push_back(static_cast<std::uint32_t>(index));
+        }
+    }
+
+    output.RaysSentToGaussian = gaussianIndices.size();
+
+    ScanResult gaussianResult;
+
+    if (!gaussianIndices.empty())
+    {
+        const auto gaussianRays = selectRays(std::span<const std::uint32_t>(gaussianIndices));
+        const auto gaussianStart = Clock::now();
+        output.RoutingMilliseconds = MillisecondsSince(routeStart);
+        gaussianResult = ScanGaussiansInChunks(gaussianSimulator, gaussianScene, gaussianRays, alphaThreshold);
+        output.GaussianMilliseconds = MillisecondsSince(gaussianStart);
+        output.Result.Timings += gaussianResult.Timings;
+    }
+    else
+    {
+        output.RoutingMilliseconds = MillisecondsSince(routeStart);
+    }
+
+    routeStart = Clock::now();
+    auto &hits = output.Result.Hits;
+    hits = std::move(meshResult.Hits);
+    auto &points = output.Result.Points;
+    points.reserve(rayCount);
+    output.Sources.resize(rayCount, HitSource::None);
+    auto meshPoint = meshResult.Points.begin();
+    auto gaussianPoint = gaussianResult.Points.begin();
+    std::size_t gaussianSlot = 0;
+
+    for (std::size_t index = 0; index < rayCount; ++index)
+    {
+        const bool meshHit = hits[index].Valid != 0;
+        if (gaussianSlot < gaussianIndices.size() && gaussianIndices[gaussianSlot] == index)
+        {
+            const auto &hit = gaussianResult.Hits[gaussianSlot++];
+            if (hit.Valid != 0)
+            {
+                hits[index] = hit;
+                points.push_back(*gaussianPoint++);
+                output.Sources[index] = HitSource::Gaussian;
+                ++output.GaussianHits;
+                if (meshHit)
+                {
+                    ++meshPoint;
+                }
+                continue;
+            }
+        }
+
+        if (meshHit)
+        {
+            points.push_back(*meshPoint++);
+            output.Sources[index] = HitSource::Mesh;
+            ++output.MeshHits;
+        }
+    }
+
+    output.RoutingMilliseconds += MillisecondsSince(routeStart);
+    output.Result.Timings.Readback += output.RoutingMilliseconds;
+    output.Result.Timings.Total = MillisecondsSince(scanStart);
+
+    return output;
 }
 } // namespace
 
 ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianScene &scene,
                                  std::span<const rt::Ray> rays, float alphaThreshold, std::size_t raysPerChunk)
 {
-    const auto scanStart = Clock::now();
-    ScanResult combined;
-    combined.Hits.reserve(rays.size());
+    return ScanInChunks(rays.size(), raysPerChunk, [&](std::size_t first, std::size_t count) {
+        return simulator.Scan(scene, rays.subspan(first, count), alphaThreshold);
+    });
+}
 
-    for (std::size_t first = 0; first < rays.size(); first += raysPerChunk)
-    {
-        const auto count = std::min(raysPerChunk, rays.size() - first);
-        auto chunk = simulator.Scan(scene, rays.subspan(first, count), alphaThreshold);
-
-        combined.Hits.insert(combined.Hits.end(), chunk.Hits.begin(), chunk.Hits.end());
-        combined.Points.insert(combined.Points.end(), chunk.Points.begin(), chunk.Points.end());
-        AddTimings(combined.Timings, chunk.Timings);
-    }
-
-    combined.Timings.Total = MillisecondsSince(scanStart);
-    return combined;
+ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianScene &scene, const SensorRays &rays,
+                                 float alphaThreshold, std::size_t raysPerChunk)
+{
+    return ScanInChunks(rays.Count(), raysPerChunk, [&](std::size_t first, std::size_t count) {
+        return simulator.Scan(scene, rays, alphaThreshold, first, count);
+    });
 }
 
 HybridScanner::HybridScanner(LidarSimulator &meshSimulator, LidarSimulator &gaussianSimulator)
@@ -60,99 +158,28 @@ HybridScanResult HybridScanner::Scan(const rt::MeshScene &meshScene, const rt::G
                                      std::span<const rt::Ray> rays, float alphaThreshold,
                                      std::span<const std::uint8_t> untrustedTriangles)
 {
-    const auto scanStart = Clock::now();
-    HybridScanResult output;
-
-    // Pass 1: every ray against the mesh.
-    const auto meshStart = Clock::now();
-    auto meshResult = m_meshSimulator.Scan(meshScene, rays);
-    output.MeshMilliseconds = MillisecondsSince(meshStart);
-    AddTimings(output.Result.Timings, meshResult.Timings);
-
-    // Route: holes and untrusted triangles go to the Gaussians.
-    auto routeStart = Clock::now();
-    std::vector<std::uint32_t> gaussianIndices;
-    std::vector<rt::Ray> gaussianRays;
-
-    for (std::size_t index = 0; index < rays.size(); ++index)
-    {
-        const auto &hit = meshResult.Hits[index];
-
-        if (hit.Valid == 0 || IsUntrusted(hit, untrustedTriangles))
-        {
-            gaussianIndices.push_back(static_cast<std::uint32_t>(index));
-            gaussianRays.push_back(rays[index]);
-        }
-    }
-
-    output.RaysSentToGaussian = gaussianRays.size();
-    output.RoutingMilliseconds = MillisecondsSince(routeStart);
-
-    // Pass 2: only the routed rays against the Gaussians.
-    ScanResult gaussianResult;
-
-    if (!gaussianRays.empty())
-    {
-        const auto gaussianStart = Clock::now();
-        gaussianResult = ScanGaussiansInChunks(m_gaussianSimulator, gaussianScene, gaussianRays, alphaThreshold);
-        output.GaussianMilliseconds = MillisecondsSince(gaussianStart);
-        AddTimings(output.Result.Timings, gaussianResult.Timings);
-    }
-
-    // Merge in input order.
-    routeStart = Clock::now();
-    auto &hits = output.Result.Hits;
-    hits = std::move(meshResult.Hits);
-    output.Sources.assign(rays.size(), HitSource::None);
-
-    for (std::size_t index = 0; index < hits.size(); ++index)
-    {
-        if (hits[index].Valid != 0)
-        {
-            output.Sources[index] = HitSource::Mesh;
-        }
-    }
-
-    for (std::size_t slot = 0; slot < gaussianIndices.size(); ++slot)
-    {
-        const auto index = gaussianIndices[slot];
-        const auto &gaussianHit = gaussianResult.Hits[slot];
-
-        // No Gaussian answer: an untrusted mesh hit is still better than nothing, so it stays.
-        if (gaussianHit.Valid != 0)
-        {
-            hits[index] = gaussianHit;
-            output.Sources[index] = HitSource::Gaussian;
-        }
-    }
-
-    auto &points = output.Result.Points;
-    points.reserve(rays.size());
-
-    for (std::size_t index = 0; index < hits.size(); ++index)
-    {
-        const auto &hit = hits[index];
-
-        if (hit.Valid == 0)
-        {
-            continue;
-        }
-
-        output.MeshHits += output.Sources[index] == HitSource::Mesh ? 1 : 0;
-        output.GaussianHits += output.Sources[index] == HitSource::Gaussian ? 1 : 0;
-
-        const auto &ray = rays[index];
-        points.push_back({
-            ray.Origin[0] + hit.T * ray.Direction[0],
-            ray.Origin[1] + hit.T * ray.Direction[1],
-            ray.Origin[2] + hit.T * ray.Direction[2],
+    return ScanHybrid(
+        m_gaussianSimulator, gaussianScene, rays.size(), alphaThreshold, untrustedTriangles,
+        [&] { return m_meshSimulator.Scan(meshScene, rays); },
+        [rays](std::span<const std::uint32_t> indices) {
+            std::vector<rt::Ray> selected;
+            selected.reserve(indices.size());
+            for (const auto index : indices)
+            {
+                selected.push_back(rays[index]);
+            }
+            return selected;
         });
-    }
-
-    output.RoutingMilliseconds += MillisecondsSince(routeStart);
-    output.Result.Timings.Readback += output.RoutingMilliseconds;
-    output.Result.Timings.Total = MillisecondsSince(scanStart);
-
-    return output;
 }
+
+HybridScanResult HybridScanner::Scan(const rt::MeshScene &meshScene, const rt::GaussianScene &gaussianScene,
+                                     const LidarSensor &sensor, const Transform &sensorToWorld, float alphaThreshold,
+                                     std::span<const std::uint8_t> untrustedTriangles)
+{
+    return ScanHybrid(
+        m_gaussianSimulator, gaussianScene, sensor.RayCount(), alphaThreshold, untrustedTriangles,
+        [&] { return m_meshSimulator.Scan(meshScene, sensor, sensorToWorld); },
+        [&](std::span<const std::uint32_t> indices) { return SensorRays{sensor, sensorToWorld, indices}; });
+}
+
 } // namespace raylidar::simulation

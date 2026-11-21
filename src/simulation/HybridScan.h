@@ -33,11 +33,16 @@ struct HybridScanResult
     double GaussianMilliseconds = 0.0; // CPU wall time of the Gaussian pass
 };
 
-// Traces Gaussians in chunks of rays, one GPU submission each. A single large Gaussian dispatch can run for seconds,
-// and Windows resets the GPU (device lost) when one submission takes longer than about 2 s.
+inline constexpr std::size_t kGaussianRaysPerChunk = 32768;
+
 [[nodiscard]]
 ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianScene &scene,
-                                 std::span<const rt::Ray> rays, float alphaThreshold, std::size_t raysPerChunk = 32768);
+                                 std::span<const rt::Ray> rays, float alphaThreshold,
+                                 std::size_t raysPerChunk = kGaussianRaysPerChunk);
+
+[[nodiscard]]
+ScanResult ScanGaussiansInChunks(LidarSimulator &simulator, const rt::GaussianScene &scene, const SensorRays &rays,
+                                 float alphaThreshold, std::size_t raysPerChunk = kGaussianRaysPerChunk);
 
 // Ground-truth-free hybrid routing.
 // Every ray is traced against the mesh first: the mesh is the most accurate where it exists and is ~1000x cheaper.
@@ -54,6 +59,11 @@ class HybridScanner
     [[nodiscard]]
     HybridScanResult Scan(const rt::MeshScene &meshScene, const rt::GaussianScene &gaussianScene,
                           std::span<const rt::Ray> rays, float alphaThreshold,
+                          std::span<const std::uint8_t> untrustedTriangles = {});
+
+    [[nodiscard]]
+    HybridScanResult Scan(const rt::MeshScene &meshScene, const rt::GaussianScene &gaussianScene,
+                          const LidarSensor &sensor, const Transform &sensorToWorld, float alphaThreshold,
                           std::span<const std::uint8_t> untrustedTriangles = {});
 
   private:

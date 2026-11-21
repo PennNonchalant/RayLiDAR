@@ -6,7 +6,6 @@
 
 #include <array>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <stdexcept>
 
@@ -33,7 +32,47 @@ vulkan::BufferDescription MakeBufferDescription(vk::DeviceSize size, vk::BufferU
     description.MemoryUsage = memoryUsage;
     return description;
 }
+rt::GaussianTraceParameters GaussianParameters(const rt::GaussianScene &scene, float alphaThreshold)
+{
+    return {.GaussianIndexStride = scene.GaussianIndexStride(),
+            .SigmaCutoff = scene.SigmaCutoff(),
+            .AlphaThreshold = alphaThreshold};
+}
+
+template <typename GetRay> void BuildPoints(ScanResult &result, const GetRay &getRay)
+{
+    const auto start = Clock::now();
+    result.Points.reserve(result.Hits.size());
+    for (std::size_t index = 0; index < result.Hits.size(); ++index)
+    {
+        const auto &hit = result.Hits[index];
+        if (hit.Valid == 0)
+        {
+            continue;
+        }
+
+        const auto &ray = getRay(index);
+        result.Points.push_back({
+            ray.Origin[0] + hit.T * ray.Direction[0],
+            ray.Origin[1] + hit.T * ray.Direction[1],
+            ray.Origin[2] + hit.T * ray.Direction[2],
+        });
+    }
+    result.Timings.Readback += MillisecondsSince(start);
+}
 } // namespace
+
+ScanTimings &ScanTimings::operator+=(const ScanTimings &other)
+{
+    Upload += other.Upload;
+    RayGen += other.RayGen;
+    Trace += other.Trace;
+    CopyHits += other.CopyHits;
+    SubmitWait += other.SubmitWait;
+    Readback += other.Readback;
+    Total += other.Total;
+    return *this;
+}
 
 LidarSimulator::LidarSimulator(const vulkan::VulkanContext &context, const std::filesystem::path &traceShaderPath,
                                std::uint32_t maxRayCount, rt::RayQueryMode mode,
@@ -140,27 +179,7 @@ ScanResult LidarSimulator::ScanUploadedRays(const SceneType &scene, std::span<co
                             [](const vk::raii::CommandBuffer &) {});
     result.Timings.Upload = upload;
 
-    const auto pointsStart = Clock::now();
-    result.Points.reserve(rays.size());
-
-    for (std::size_t index = 0; index < rays.size(); ++index)
-    {
-        const auto &hit = result.Hits[index];
-
-        if (hit.Valid == 0)
-        {
-            continue;
-        }
-
-        const auto &ray = rays[index];
-        result.Points.push_back({
-            ray.Origin[0] + hit.T * ray.Direction[0],
-            ray.Origin[1] + hit.T * ray.Direction[1],
-            ray.Origin[2] + hit.T * ray.Direction[2],
-        });
-    }
-
-    result.Timings.Readback += MillisecondsSince(pointsStart);
+    BuildPoints(result, [rays](std::size_t index) -> const rt::Ray & { return rays[index]; });
     result.Timings.Total = MillisecondsSince(scanStart);
     return result;
 }
@@ -172,76 +191,66 @@ ScanResult LidarSimulator::Scan(const rt::MeshScene &scene, std::span<const rt::
 
 ScanResult LidarSimulator::Scan(const rt::GaussianScene &scene, std::span<const rt::Ray> rays, float alphaThreshold)
 {
-    const rt::GaussianTraceParameters parameters{
-        .GaussianIndexStride = scene.GaussianIndexStride(),
-        .SigmaCutoff = scene.SigmaCutoff(),
-        .AlphaThreshold = alphaThreshold,
-    };
-    return ScanUploadedRays(scene, rays, parameters);
+    return ScanUploadedRays(scene, rays, GaussianParameters(scene, alphaThreshold));
 }
 
-void LidarSimulator::EnableGpuRayGeneration(const std::filesystem::path &rayGenShaderPath)
+void LidarSimulator::EnableGpuRayGeneration(const std::filesystem::path &rayGenShaderPath, const LidarSensor &sensor)
 {
     m_deviceRayBuffer.emplace(m_context, MakeBufferDescription(m_maxRayCount * sizeof(rt::Ray),
                                                                vk::BufferUsageFlagBits::eStorageBuffer,
                                                                vulkan::BufferMemoryUsage::Device));
-    m_rayGenerator.emplace(m_context, rayGenShaderPath);
-    m_rayGenerator->SetOutput(*m_deviceRayBuffer);
+    m_rayGenerator.emplace(m_context, rayGenShaderPath, sensor);
+    m_rayGenerator->SetBuffers(*m_deviceRayBuffer, m_rayBuffer);
 }
 
 ScanResult LidarSimulator::Scan(const rt::MeshScene &scene, const LidarSensor &sensor, const Transform &sensorToWorld)
+{
+    return ScanGeneratedRays(scene, {sensor, sensorToWorld}, rt::MeshTraceParameters{}, 0, sensor.RayCount());
+}
+
+ScanResult LidarSimulator::Scan(const rt::GaussianScene &scene, const SensorRays &rays, float alphaThreshold,
+                                std::size_t first, std::size_t count)
+{
+    return ScanGeneratedRays(scene, rays, GaussianParameters(scene, alphaThreshold), first, count);
+}
+
+template <typename SceneType, typename Parameters>
+ScanResult LidarSimulator::ScanGeneratedRays(const SceneType &scene, const SensorRays &rays, Parameters parameters,
+                                             std::size_t first, std::size_t count)
 {
     if (!m_rayGenerator)
     {
         throw std::logic_error("Call EnableGpuRayGeneration before scanning with GPU-generated rays.");
     }
-    if (sensor.RayCount() > m_maxRayCount)
+    if (count > m_maxRayCount)
     {
         throw std::out_of_range("Ray count exceeds LidarSimulator capacity.");
     }
 
     const auto scanStart = Clock::now();
-    const auto &description = sensor.Description();
-
-    auto result = TraceRays(scene, *m_deviceRayBuffer, sensor.RayCount(), rt::MeshTraceParameters{},
-                            [this, &description, &sensorToWorld](const vk::raii::CommandBuffer &commandBuffer) {
-                                m_rayGenerator->Record(commandBuffer, description, sensorToWorld);
-                                vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eComputeShader,
-                                                            vk::AccessFlagBits2::eShaderWrite,
-                                                            vk::PipelineStageFlagBits2::eComputeShader,
-                                                            vk::AccessFlagBits2::eShaderRead);
-                            });
-
-    // The rays never reach the CPU, so rebuild each hit point from the sensor direction, the same way the GPU did.
-    const auto pointsStart = Clock::now();
-    const auto directions = sensor.LocalDirections();
-    const auto &m = sensorToWorld;
-    result.Points.reserve(result.Hits.size());
-
-    for (std::size_t index = 0; index < result.Hits.size(); ++index)
+    const auto rayCount = static_cast<std::uint32_t>(count);
+    const bool useRayIndices = !rays.Indices.empty();
+    double upload = 0.0;
+    if (useRayIndices)
     {
-        const auto &hit = result.Hits[index];
-        if (hit.Valid == 0)
-        {
-            continue;
-        }
-
-        const auto &d = directions[index];
-        std::array<float, 3> world = {
-            m[0][0] * d[0] + m[0][1] * d[1] + m[0][2] * d[2],
-            m[1][0] * d[0] + m[1][1] * d[1] + m[1][2] * d[2],
-            m[2][0] * d[0] + m[2][1] * d[1] + m[2][2] * d[2],
-        };
-        const float scale = hit.T / std::sqrt(world[0] * world[0] + world[1] * world[1] + world[2] * world[2]);
-
-        result.Points.push_back({
-            m[0][3] + scale * world[0],
-            m[1][3] + scale * world[1],
-            m[2][3] + scale * world[2],
-        });
+        const auto uploadStart = Clock::now();
+        m_rayBuffer.Write(std::as_bytes(rays.Indices.subspan(first, count)));
+        upload = MillisecondsSince(uploadStart);
     }
 
-    result.Timings.Readback += MillisecondsSince(pointsStart);
+    auto result =
+        TraceRays(scene, *m_deviceRayBuffer, rayCount, parameters, [&](const vk::raii::CommandBuffer &commandBuffer) {
+            m_rayGenerator->Record(commandBuffer, rays.Sensor.Description(), rays.SensorToWorld,
+                                   static_cast<std::uint32_t>(first), rayCount, useRayIndices);
+            vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+                                        vk::AccessFlagBits2::eShaderWrite, vk::PipelineStageFlagBits2::eComputeShader,
+                                        vk::AccessFlagBits2::eShaderRead);
+        });
+    result.Timings.Upload = upload;
+    BuildPoints(result, [&](std::size_t index) {
+        const auto rayIndex = useRayIndices ? rays.Indices[first + index] : first + index;
+        return rays.Sensor.GenerateRay(rayIndex, rays.SensorToWorld);
+    });
     result.Timings.Total = MillisecondsSince(scanStart);
     return result;
 }
