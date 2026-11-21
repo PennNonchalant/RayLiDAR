@@ -29,7 +29,6 @@ struct HybridScanResult
     std::size_t RaysSentToGaussian = 0;
 
     double MeshMilliseconds = 0.0;     // CPU wall time of the mesh pass
-    double RoutingMilliseconds = 0.0;  // CPU: pick rays for the Gaussian pass and merge
     double GaussianMilliseconds = 0.0; // CPU wall time of the Gaussian pass
 };
 

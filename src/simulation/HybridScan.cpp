@@ -86,7 +86,7 @@ HybridScanResult ScanHybrid(LidarSimulator &gaussianSimulator, const rt::Gaussia
     {
         const auto gaussianRays = selectRays(std::span<const std::uint32_t>(gaussianIndices));
         const auto gaussianStart = Clock::now();
-        output.RoutingMilliseconds = MillisecondsSince(routeStart);
+        output.Result.Timings.Routing = MillisecondsSince(routeStart);
         gaussianResult =
             ScanGaussians(gaussianSimulator, gaussianScene, gaussianRays, alphaThreshold, gaussianChunkSize);
         output.GaussianMilliseconds = MillisecondsSince(gaussianStart);
@@ -94,7 +94,7 @@ HybridScanResult ScanHybrid(LidarSimulator &gaussianSimulator, const rt::Gaussia
     }
     else
     {
-        output.RoutingMilliseconds = MillisecondsSince(routeStart);
+        output.Result.Timings.Routing = MillisecondsSince(routeStart);
     }
 
     routeStart = Clock::now();
@@ -135,8 +135,7 @@ HybridScanResult ScanHybrid(LidarSimulator &gaussianSimulator, const rt::Gaussia
         }
     }
 
-    output.RoutingMilliseconds += MillisecondsSince(routeStart);
-    output.Result.Timings.Readback += output.RoutingMilliseconds;
+    output.Result.Timings.Routing += MillisecondsSince(routeStart);
     output.Result.Timings.Total = MillisecondsSince(scanStart);
 
     return output;

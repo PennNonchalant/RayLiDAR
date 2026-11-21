@@ -70,6 +70,7 @@ ScanTimings &ScanTimings::operator+=(const ScanTimings &other)
     CopyHits += other.CopyHits;
     SubmitWait += other.SubmitWait;
     Readback += other.Readback;
+    Routing += other.Routing;
     Total += other.Total;
     return *this;
 }

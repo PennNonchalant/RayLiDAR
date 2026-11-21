@@ -33,6 +33,7 @@ void PrintTimings(const sim::ScanTimings &timings, double generate, std::size_t 
               << "    Trace (GPU):          " << timings.Trace << " ms\n"
               << "    Copy hits (GPU):      " << timings.CopyHits << " ms\n"
               << "  Readback + points (CPU):" << timings.Readback << " ms\n"
+              << "  Hybrid routing (CPU):   " << timings.Routing << " ms\n"
               << "  End-to-end:             " << total << " ms (" << 1000.0 / total << " scans/s, "
               << static_cast<double>(rayCount) / (total * 1.0e3) << " Mrays/s)\n";
 }
@@ -216,7 +217,8 @@ void PrintHybridRouting(const sim::GtRays &gt, const sim::HybridScanResult &hybr
               << "  Final hits from Gauss:  " << 100.0 * static_cast<double>(hybridResult.GaussianHits) / total
               << " % (median " << Percentile(fromGaussian.AbsoluteErrors, 0.5) << " m)\n"
               << "  Wall time: mesh " << hybridResult.MeshMilliseconds << " ms, routing "
-              << hybridResult.RoutingMilliseconds << " ms, Gaussian " << hybridResult.GaussianMilliseconds << " ms\n";
+              << hybridResult.Result.Timings.Routing << " ms, Gaussian " << hybridResult.GaussianMilliseconds
+              << " ms\n";
 }
 
 void PrintComparison(const sim::GtRays &gt, const sim::ScanResult &meshResult, const sim::ScanResult &gaussianResult,
@@ -334,6 +336,7 @@ void RunVelodyneScans(const sim::LidarSensor &sensor, std::span<const sim::Velod
     average.CopyHits = sum.CopyHits / frames;
     average.SubmitWait = sum.SubmitWait / frames;
     average.Readback = sum.Readback / frames;
+    average.Routing = sum.Routing / frames;
     average.Total = sum.Total / frames;
 
     std::cout << "\n=== HDL-64E scans from T_W_V ===\n"
