@@ -47,34 +47,31 @@ LidarSensor::LidarSensor(const LidarSensorDescription &description) : m_descript
 
 std::vector<rt::Ray> LidarSensor::GenerateRays(const Transform &sensorToWorld) const
 {
-    const auto &m = sensorToWorld;
-
     std::vector<rt::Ray> rays(m_localDirections.size());
 
     for (std::size_t index = 0; index < rays.size(); ++index)
     {
-        const auto &d = m_localDirections[index];
-
-        std::array<float, 3> world = {
-            m[0][0] * d[0] + m[0][1] * d[1] + m[0][2] * d[2],
-            m[1][0] * d[0] + m[1][1] * d[1] + m[1][2] * d[2],
-            m[2][0] * d[0] + m[2][1] * d[1] + m[2][2] * d[2],
-        };
-
-        const float length = std::sqrt(world[0] * world[0] + world[1] * world[1] + world[2] * world[2]);
-
-        for (auto &component : world)
-        {
-            component /= length;
-        }
-
-        auto &ray = rays[index];
-        ray.Origin = {m[0][3], m[1][3], m[2][3]};
-        ray.TMin = m_description.RangeMin;
-        ray.Direction = world;
-        ray.TMax = m_description.RangeMax;
+        rays[index] = GenerateRay(index, sensorToWorld);
     }
 
     return rays;
+}
+
+rt::Ray LidarSensor::GenerateRay(std::size_t index, const Transform &sensorToWorld) const
+{
+    const auto &m = sensorToWorld;
+    const auto &d = m_localDirections[index];
+    std::array<float, 3> world = {
+        m[0][0] * d[0] + m[0][1] * d[1] + m[0][2] * d[2],
+        m[1][0] * d[0] + m[1][1] * d[1] + m[1][2] * d[2],
+        m[2][0] * d[0] + m[2][1] * d[1] + m[2][2] * d[2],
+    };
+    const float length = std::sqrt(world[0] * world[0] + world[1] * world[1] + world[2] * world[2]);
+    for (auto &component : world)
+    {
+        component /= length;
+    }
+
+    return {{m[0][3], m[1][3], m[2][3]}, m_description.RangeMin, world, m_description.RangeMax};
 }
 } // namespace raylidar::simulation

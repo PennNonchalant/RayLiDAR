@@ -60,6 +60,9 @@ class LidarSensor
     [[nodiscard]]
     std::vector<rt::Ray> GenerateRays(const Transform &sensorToWorld) const;
 
+    [[nodiscard]]
+    rt::Ray GenerateRay(std::size_t index, const Transform &sensorToWorld) const;
+
   private:
     LidarSensorDescription m_description;
     std::vector<std::array<float, 3>> m_localDirections;

@@ -36,6 +36,8 @@ struct ScanTimings
     double Readback = 0.0;   // CPU: read hits and build points
     double Routing = 0.0;    // CPU, hybrid only: pick the rays for the Gaussian pass and merge both passes
     double Total = 0.0;      // CPU: the whole Scan() call
+
+    ScanTimings &operator+=(const ScanTimings &other);
 };
 
 struct ScanResult
@@ -47,11 +49,25 @@ struct ScanResult
     ScanTimings Timings;
 };
 
+struct SensorRays
+{
+    const LidarSensor &Sensor;
+    const Transform &SensorToWorld;
+    std::span<const std::uint32_t> Indices{};
+
+    [[nodiscard]]
+    std::size_t Count() const
+    {
+        return Indices.empty() ? Sensor.RayCount() : Indices.size();
+    }
+};
+
 class LidarSimulator
 {
   public:
     LidarSimulator(const vulkan::VulkanContext &context, const std::filesystem::path &traceShaderPath,
-                   std::uint32_t maxRayCount, rt::RayQueryMode mode = rt::RayQueryMode::Mesh);
+                   std::uint32_t maxRayCount, rt::RayQueryMode mode = rt::RayQueryMode::Mesh,
+                   rt::GaussianTraceOptions gaussianOptions = {});
 
     LidarSimulator(const LidarSimulator &) = delete;
     LidarSimulator &operator=(const LidarSimulator &) = delete;
@@ -68,12 +84,16 @@ class LidarSimulator
     ScanResult Scan(const rt::GaussianScene &scene, std::span<const rt::Ray> rays, float alphaThreshold);
 
     // Creates the GPU ray generator and a device-local ray buffer. Required before Scan(scene, sensor, pose).
-    void EnableGpuRayGeneration(const std::filesystem::path &rayGenShaderPath);
+    void EnableGpuRayGeneration(const std::filesystem::path &rayGenShaderPath, const LidarSensor &sensor);
 
     // Generates the sensor's rays on the GPU and traces them in the same submission: no CPU ray generation and no
     // ray upload. Points are rebuilt on the CPU from the sensor directions and the pose.
     [[nodiscard]]
     ScanResult Scan(const rt::MeshScene &scene, const LidarSensor &sensor, const Transform &sensorToWorld);
+
+    [[nodiscard]]
+    ScanResult Scan(const rt::GaussianScene &scene, const SensorRays &rays, float alphaThreshold, std::size_t first,
+                    std::size_t count);
 
   private:
     // Traces rayCount rays already in rays (or written there by recordRays in the same submission) and reads the
@@ -85,6 +105,10 @@ class LidarSimulator
     // Uploads rays from the CPU, traces them and builds points.
     template <typename SceneType, typename Parameters>
     ScanResult ScanUploadedRays(const SceneType &scene, std::span<const rt::Ray> rays, Parameters parameters);
+
+    template <typename SceneType, typename Parameters>
+    ScanResult ScanGeneratedRays(const SceneType &scene, const SensorRays &rays, Parameters parameters,
+                                 std::size_t first, std::size_t count);
 
     const vulkan::VulkanContext &m_context;
     std::uint32_t m_maxRayCount = 0;

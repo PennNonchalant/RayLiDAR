@@ -5,7 +5,6 @@
 #include "vulkan/VulkanContext.h"
 
 #include <algorithm>
-#include <limits>
 #include <utility>
 
 namespace raylidar::rt
@@ -17,6 +16,51 @@ using Position = std::array<float, 3>;
 constexpr std::uint32_t kVerticesPerGaussian = 4;
 constexpr std::uint32_t kTrianglesPerGaussian = 2;
 constexpr std::uint32_t kIndicesPerGaussian = 3 * kTrianglesPerGaussian;
+constexpr std::uint32_t kMortonAxisBits = 10;
+
+std::uint32_t MortonCode(const Position &center, const Position &minimum, const Position &scale)
+{
+    std::uint32_t code = 0;
+    for (std::uint32_t axis = 0; axis < center.size(); ++axis)
+    {
+        const auto coordinate = static_cast<std::uint32_t>((center[axis] - minimum[axis]) * scale[axis]);
+        for (std::uint32_t bit = 0; bit < kMortonAxisBits; ++bit)
+        {
+            code |= ((coordinate >> bit) & 1u) << (3 * bit + axis);
+        }
+    }
+    return code;
+}
+
+void SortByMortonCode(std::span<const Gaussian> gaussians, std::span<std::uint32_t> indices)
+{
+    Position minimum = gaussians.front().Center;
+    Position maximum = minimum;
+    for (const auto &gaussian : gaussians)
+    {
+        for (std::size_t axis = 0; axis < minimum.size(); ++axis)
+        {
+            minimum[axis] = std::min(minimum[axis], gaussian.Center[axis]);
+            maximum[axis] = std::max(maximum[axis], gaussian.Center[axis]);
+        }
+    }
+
+    Position scale{};
+    for (std::size_t axis = 0; axis < scale.size(); ++axis)
+    {
+        const float extent = maximum[axis] - minimum[axis];
+        scale[axis] = extent > 0.0f ? static_cast<float>((1u << kMortonAxisBits) - 1u) / extent : 0.0f;
+    }
+
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> keys;
+    keys.reserve(gaussians.size());
+    for (std::uint32_t index = 0; index < gaussians.size(); ++index)
+    {
+        keys.emplace_back(MortonCode(gaussians[index].Center, minimum, scale), index);
+    }
+    std::sort(keys.begin(), keys.end());
+    std::transform(keys.begin(), keys.end(), indices.begin(), [](const auto &key) { return key.second; });
+}
 
 void RecordCopy(const vk::raii::CommandBuffer &commandBuffer, const vulkan::Buffer &source,
                 const vulkan::Buffer &destination)
@@ -33,15 +77,23 @@ GaussianProxyGeometry GaussianProxyGeometry::Create(const GaussianSceneDescripti
     geometry.Vertices.reserve(gaussians.size() * kVerticesPerGaussian);
     geometry.Indices.reserve(gaussians.size() * kIndicesPerGaussian);
     geometry.Batches.reserve((gaussians.size() + gaussiansPerBatch - 1) / gaussiansPerBatch);
+    const bool useMortonOrder = description.BlasGroupSizeLog2 != 0;
+    if (useMortonOrder)
+    {
+        geometry.GaussianIndices.resize(gaussians.size());
+        SortByMortonCode(gaussians, geometry.GaussianIndices);
+    }
 
     for (std::size_t first = 0; first < gaussians.size(); first += gaussiansPerBatch)
     {
-        const auto batch = gaussians.subspan(first, std::min<std::size_t>(gaussians.size() - first, gaussiansPerBatch));
-        geometry.Batches.push_back({first, static_cast<std::uint32_t>(batch.size())});
+        const auto count =
+            static_cast<std::uint32_t>(std::min<std::size_t>(gaussians.size() - first, gaussiansPerBatch));
+        geometry.Batches.push_back({first, count});
 
-        for (std::size_t index = 0; index < batch.size(); ++index)
+        for (std::uint32_t index = 0; index < count; ++index)
         {
-            const auto &gaussian = batch[index];
+            const auto slot = first + index;
+            const auto &gaussian = gaussians[useMortonOrder ? geometry.GaussianIndices[slot] : slot];
             const float extentU = description.SigmaCutoff * gaussian.SigmaU;
             const float extentV = description.SigmaCutoff * gaussian.SigmaV;
             std::array<Position, kVerticesPerGaussian> corners{};
@@ -57,7 +109,7 @@ GaussianProxyGeometry GaussianProxyGeometry::Create(const GaussianSceneDescripti
                 corners[3][axis] = center - u + v;
             }
 
-            const auto base = static_cast<std::uint32_t>(index) * kVerticesPerGaussian;
+            const auto base = index * kVerticesPerGaussian;
             geometry.Vertices.insert(geometry.Vertices.end(), corners.begin(), corners.end());
             geometry.Indices.insert(geometry.Indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
         }
@@ -68,7 +120,8 @@ GaussianProxyGeometry GaussianProxyGeometry::Create(const GaussianSceneDescripti
 
 GaussianScene::GaussianScene(const vulkan::VulkanContext &context, const GaussianSceneDescription &description)
     : m_sigmaCutoff(description.SigmaCutoff),
-      m_gaussiansPerBatch(context.AccelerationStructureProperties().maxPrimitiveCount / kTrianglesPerGaussian),
+      m_gaussiansPerBatch(description.BlasGroupSizeLog2 == 0 ? static_cast<std::uint32_t>(description.Gaussians.size())
+                                                             : 1u << description.BlasGroupSizeLog2),
       m_gaussianBuffer(context, {description.Gaussians.size_bytes(),
                                  vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer})
 {
@@ -80,16 +133,30 @@ GaussianScene::GaussianScene(const vulkan::VulkanContext &context, const Gaussia
         MakeTriangleBuildInputBuffer(context, vertices.size()),
         MakeTriangleBuildInputBuffer(context, indices.size()),
         MakeStagingBuffer(context, std::as_bytes(description.Gaussians)),
+        std::nullopt,
         MakeStagingBuffer(context, vertices),
         MakeStagingBuffer(context, indices),
         std::move(geometry.Batches),
     });
+
+    if (!geometry.GaussianIndices.empty())
+    {
+        const auto gaussianIndices = std::as_bytes(std::span(geometry.GaussianIndices));
+        m_gaussianIndexBuffer.emplace(
+            context, vulkan::BufferDescription{gaussianIndices.size(), vk::BufferUsageFlagBits::eTransferDst |
+                                                                           vk::BufferUsageFlagBits::eStorageBuffer});
+        m_buildResources->GaussianIndexUpload.emplace(MakeStagingBuffer(context, gaussianIndices));
+    }
 }
 
 void GaussianScene::RecordBuild(const vk::raii::CommandBuffer &commandBuffer, ASBuilder &builder)
 {
     const auto &resources = *m_buildResources;
     RecordCopy(commandBuffer, resources.GaussianUpload, m_gaussianBuffer);
+    if (resources.GaussianIndexUpload)
+    {
+        RecordCopy(commandBuffer, *resources.GaussianIndexUpload, *m_gaussianIndexBuffer);
+    }
     RecordCopy(commandBuffer, resources.VertexUpload, resources.VertexBuffer);
     RecordCopy(commandBuffer, resources.IndexUpload, resources.IndexBuffer);
 

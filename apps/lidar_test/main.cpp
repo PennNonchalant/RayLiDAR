@@ -186,7 +186,7 @@ void RunWallTest(const std::filesystem::path &shaderPath, const std::filesystem:
 
     if (!rayGenShaderPath.empty())
     {
-        simulator.EnableGpuRayGeneration(rayGenShaderPath);
+        simulator.EnableGpuRayGeneration(rayGenShaderPath, sensor);
         const auto gpuResult = simulator.Scan(scene, sensor, sim::kIdentityTransform);
         checkWall(gpuResult, "GPU rays");
 
@@ -224,7 +224,7 @@ void RunRayGenTest(const std::filesystem::path &shaderPath)
     const auto expected = sensor.GenerateRays(pose);
 
     raylidar::vulkan::VulkanContext context;
-    sim::GpuRayGenerator generator(context, shaderPath);
+    sim::GpuRayGenerator generator(context, shaderPath, sensor);
 
     const vk::DeviceSize rayBytes = expected.size() * sizeof(raylidar::rt::Ray);
 
@@ -239,47 +239,55 @@ void RunRayGenTest(const std::filesystem::path &shaderPath)
     readbackDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Readback;
     const raylidar::vulkan::Buffer readbackBuffer(context, readbackDescription);
 
-    generator.SetOutput(rayBuffer);
+    const std::array<std::uint32_t, 4> indices{sensor.RayCount() - 1, 0, 2048, 32769};
+    raylidar::vulkan::BufferDescription indexDescription;
+    indexDescription.Size = sizeof(indices);
+    indexDescription.Usage = vk::BufferUsageFlagBits::eStorageBuffer;
+    indexDescription.MemoryUsage = raylidar::vulkan::BufferMemoryUsage::Upload;
+    raylidar::vulkan::Buffer indexBuffer(context, indexDescription);
+    indexBuffer.Write(std::as_bytes(std::span(indices)));
+    generator.SetBuffers(rayBuffer, indexBuffer);
 
     const vk::raii::QueryPool timestamps(context.Device(), vk::QueryPoolCreateInfo({}, vk::QueryType::eTimestamp, 2));
-
     raylidar::vulkan::CommandContext commands(context);
-    const auto &commandBuffer = commands.Begin();
-
-    commandBuffer.resetQueryPool(*timestamps, 0, 2);
-    commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *timestamps, 0);
-    generator.Record(commandBuffer, description, pose);
-    commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *timestamps, 1);
-
-    raylidar::vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eComputeShader,
-                                          vk::AccessFlagBits2::eShaderWrite, vk::PipelineStageFlagBits2::eCopy,
-                                          vk::AccessFlagBits2::eTransferRead);
-    commandBuffer.copyBuffer(rayBuffer.Handle(), readbackBuffer.Handle(), vk::BufferCopy(0, 0, rayBytes));
-    raylidar::vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eCopy,
-                                          vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eHost,
-                                          vk::AccessFlagBits2::eHostRead);
-    commands.End();
-    commands.SubmitAndWait();
-
-    std::vector<raylidar::rt::Ray> actual(expected.size());
-    readbackBuffer.Read(std::as_writable_bytes(std::span(actual)));
-
     float maxDirectionError = 0.0f;
 
-    for (std::size_t index = 0; index < expected.size(); ++index)
-    {
-        const auto &a = actual[index];
-        const auto &e = expected[index];
+    const auto checkRays = [&](std::uint32_t first, std::uint32_t count, bool indexed) {
+        const auto &commandBuffer = commands.Begin();
+        const vk::DeviceSize bytes = count * sizeof(raylidar::rt::Ray);
+        commandBuffer.resetQueryPool(*timestamps, 0, 2);
+        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *timestamps, 0);
+        generator.Record(commandBuffer, description, pose, first, count, indexed);
+        commandBuffer.writeTimestamp2(vk::PipelineStageFlagBits2::eComputeShader, *timestamps, 1);
 
-        for (std::size_t axis = 0; axis < 3; ++axis)
+        raylidar::vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eComputeShader,
+                                              vk::AccessFlagBits2::eShaderWrite, vk::PipelineStageFlagBits2::eCopy,
+                                              vk::AccessFlagBits2::eTransferRead);
+        commandBuffer.copyBuffer(rayBuffer.Handle(), readbackBuffer.Handle(), vk::BufferCopy(0, 0, bytes));
+        raylidar::vulkan::RecordMemoryBarrier(commandBuffer, vk::PipelineStageFlagBits2::eCopy,
+                                              vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eHost,
+                                              vk::AccessFlagBits2::eHostRead);
+        commands.End();
+        commands.SubmitAndWait();
+
+        std::vector<raylidar::rt::Ray> actual(count);
+        readbackBuffer.Read(std::as_writable_bytes(std::span(actual)));
+        for (std::size_t index = 0; index < actual.size(); ++index)
         {
-            Check(a.Origin[axis] == e.Origin[axis], "Origin mismatch at ray " + std::to_string(index) + ".");
-            maxDirectionError = std::max(maxDirectionError, std::abs(a.Direction[axis] - e.Direction[axis]));
+            const auto &a = actual[index];
+            const auto &e = expected[indexed ? indices[index] : first + index];
+            Check(a.Origin == e.Origin, "Origin mismatch at ray " + std::to_string(index) + ".");
+            Check(a.TMin == e.TMin && a.TMax == e.TMax, "Range mismatch at ray " + std::to_string(index) + ".");
+            for (std::size_t axis = 0; axis < 3; ++axis)
+            {
+                maxDirectionError = std::max(maxDirectionError, std::abs(a.Direction[axis] - e.Direction[axis]));
+            }
         }
+    };
 
-        Check(a.TMin == e.TMin && a.TMax == e.TMax, "Range mismatch at ray " + std::to_string(index) + ".");
-    }
-
+    checkRays(32768, 67, false);
+    checkRays(0, static_cast<std::uint32_t>(indices.size()), true);
+    checkRays(0, sensor.RayCount(), false);
     Check(maxDirectionError < 1.0e-4f, "Direction mismatch: max error " + std::to_string(maxDirectionError) + ".");
 
     // CPU generation time for comparison.
@@ -296,7 +304,7 @@ void RunRayGenTest(const std::filesystem::path &shaderPath)
                                              context.PhysicalDeviceProperties().limits.timestampPeriod / 1.0e6
                                        : 0.0;
 
-    std::cout << "GPU ray generation test passed: " << actual.size() << " rays, max direction error "
+    std::cout << "GPU ray generation test passed: " << expected.size() << " rays, max direction error "
               << maxDirectionError << ". GPU " << gpuMilliseconds << " ms vs CPU " << cpuMilliseconds << " ms ("
               << cpuRays.size() << " rays).\n";
 }

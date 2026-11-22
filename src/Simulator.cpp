@@ -15,6 +15,7 @@
 #include "vulkan/VulkanContext.h"
 
 #include <chrono>
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <type_traits>
@@ -28,7 +29,8 @@ using Clock = std::chrono::steady_clock;
 
 constexpr const char *kMeshTraceShader = "LidarTrace.spv";
 constexpr const char *kRayGenShader = "LidarRayGen.spv";
-constexpr const char *kGaussianTraceShader = "GaussianTraceK16.spv";
+constexpr const char *kGaussianTraceShader = "GaussianTrace.spv";
+constexpr std::size_t kGaussianRaysPerChunk = 32768;
 
 double MillisecondsSince(Clock::time_point start)
 {
@@ -276,7 +278,7 @@ class MeshBackend final : public ScanBackend
     {
         if (!shaders.RayGen.empty())
         {
-            m_simulator.EnableGpuRayGeneration(shaders.RayGen);
+            m_simulator.EnableGpuRayGeneration(shaders.RayGen, sensor);
             m_gpuRayGeneration = true;
         }
     }
@@ -327,7 +329,8 @@ class GaussianBackend final : public ScanBackend
 
         BackendScan scan;
         scan.GenerateMilliseconds = generated.Milliseconds;
-        scan.Result = simulation::ScanGaussiansInChunks(m_simulator, m_scene, generated.Rays, m_alphaThreshold);
+        scan.Result =
+            simulation::ScanGaussians(m_simulator, m_scene, generated.Rays, m_alphaThreshold, kGaussianRaysPerChunk);
         scan.Sources = simulation::SourcesFor(scan.Result.Hits, simulation::HitSource::Gaussian);
         return scan;
     }
@@ -350,7 +353,7 @@ class HybridBackend final : public ScanBackend
         : m_meshScene(meshScene), m_gaussianScene(gaussianScene), m_sensor(sensor),
           m_meshSimulator(context, shaders.MeshTrace, sensor.RayCount()),
           m_gaussianSimulator(context, shaders.GaussianTrace, sensor.RayCount(), rt::RayQueryMode::Gaussian),
-          m_scanner(m_meshSimulator, m_gaussianSimulator), m_alphaThreshold(alphaThreshold)
+          m_scanner(m_meshSimulator, m_gaussianSimulator, kGaussianRaysPerChunk), m_alphaThreshold(alphaThreshold)
     {
     }
 

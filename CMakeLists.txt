@@ -51,6 +51,7 @@ target_link_libraries(raylidar_api_test PRIVATE
 
 add_executable(raylidar_kitti_eval
     apps/kitti_eval/main.cpp
+    apps/kitti_eval/Report.cpp
 )
 
 target_link_libraries(raylidar_kitti_eval PRIVATE

@@ -24,7 +24,7 @@ struct MeshTraceParameters
 struct GaussianTraceParameters
 {
     std::uint32_t RayCount = 0;
-    std::uint32_t GaussiansPerBatch = 0;
+    std::uint32_t GaussianIndexStride = 0;
     float SigmaCutoff = 0.0f;
     float AlphaThreshold = 0.0f;
 };
@@ -35,6 +35,15 @@ enum class RayQueryMode
     Gaussian
 };
 
+inline constexpr std::uint32_t kDefaultGaussianHitBatchSize = 16;
+
+struct GaussianTraceOptions
+{
+    std::uint32_t HitBatchSize = kDefaultGaussianHitBatchSize;
+    bool CandidateAlphaBound = true;
+    bool PrefixAlphaBound = true;
+};
+
 class MeshScene;
 class GaussianScene;
 
@@ -42,7 +51,7 @@ class RayQueryTracer
 {
   public:
     RayQueryTracer(const vulkan::VulkanContext &context, const vulkan::Shader &shader,
-                   RayQueryMode mode = RayQueryMode::Mesh);
+                   RayQueryMode mode = RayQueryMode::Mesh, GaussianTraceOptions gaussianOptions = {});
     ~RayQueryTracer() = default;
 
     RayQueryTracer(const RayQueryTracer &) = delete;

@@ -1,5 +1,3 @@
-// Generates HDL-64E style rays on the GPU, matching simulation::LidarSensor ray for ray.
-// Ray index = beam * AzimuthCount + azimuth.
 struct Ray
 {
     float3 Origin;
@@ -11,24 +9,32 @@ struct Ray
 
 struct RayGenParameters
 {
-    // Rows of the 3x4 sensor-to-world transform [R | t], in the local frame.
     float4 Row0;
     float4 Row1;
     float4 Row2;
 
-    uint BeamCount;
-    uint AzimuthCount;
-    float ElevationMin;
-    float ElevationMax;
-
     float RangeMin;
     float RangeMax;
-    uint Padding0;
-    uint Padding1;
+    uint FirstRay;
+    uint RayCount;
+    uint UseRayIndices;
+};
+
+struct LocalDirection
+{
+    float X;
+    float Y;
+    float Z;
 };
 
 [[vk::binding(0, 0)]]
 RWStructuredBuffer<Ray> rays;
+
+[[vk::binding(1, 0)]]
+StructuredBuffer<uint> rayIndices;
+
+[[vk::binding(2, 0)]]
+StructuredBuffer<LocalDirection> localDirections;
 
 [[vk::push_constant]]
 ConstantBuffer<RayGenParameters> parameters;
@@ -37,29 +43,28 @@ ConstantBuffer<RayGenParameters> parameters;
 [numthreads(64, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID)
 {
-    uint index = id.x;
-
-    if (index >= parameters.BeamCount * parameters.AzimuthCount)
+    if (id.x >= parameters.RayCount)
     {
         return;
     }
 
-    uint beam = index / parameters.AzimuthCount;
-    uint step = index % parameters.AzimuthCount;
-
-    float t = parameters.BeamCount > 1 ? float(beam) / float(parameters.BeamCount - 1) : 0.0f;
-    float elevation = parameters.ElevationMin + (parameters.ElevationMax - parameters.ElevationMin) * t;
-    float azimuth = 6.28318530718f * float(step) / float(parameters.AzimuthCount);
-
-    float3 local = float3(cos(elevation) * cos(azimuth), cos(elevation) * sin(azimuth), sin(elevation));
-    float3 world = float3(dot(parameters.Row0.xyz, local), dot(parameters.Row1.xyz, local),
-                          dot(parameters.Row2.xyz, local));
+    uint index = parameters.FirstRay + id.x;
+    if (parameters.UseRayIndices != 0u)
+    {
+        index = rayIndices[id.x];
+    }
+    LocalDirection local = localDirections[index];
+    precise float3 world = float3(
+        parameters.Row0.x * local.X + parameters.Row0.y * local.Y + parameters.Row0.z * local.Z,
+        parameters.Row1.x * local.X + parameters.Row1.y * local.Y + parameters.Row1.z * local.Z,
+        parameters.Row2.x * local.X + parameters.Row2.y * local.Y + parameters.Row2.z * local.Z);
+    precise float length = sqrt(world.x * world.x + world.y * world.y + world.z * world.z);
+    precise float3 direction = world / length;
 
     Ray ray;
     ray.Origin = float3(parameters.Row0.w, parameters.Row1.w, parameters.Row2.w);
     ray.TMin = parameters.RangeMin;
-    ray.Direction = normalize(world);
+    ray.Direction = direction;
     ray.TMax = parameters.RangeMax;
-
-    rays[index] = ray;
+    rays[id.x] = ray;
 }

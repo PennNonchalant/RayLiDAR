@@ -67,7 +67,7 @@ struct SimulatorConfig
     std::filesystem::path MeshPath;
     std::filesystem::path GaussianPath;
 
-    // Folder with the compiled shaders: LidarTrace.spv (Mesh, Hybrid), GaussianTraceK16.spv (Gaussian, Hybrid) and,
+    // Folder with the compiled shaders: LidarTrace.spv (Mesh, Hybrid), GaussianTrace.spv (Gaussian, Hybrid) and,
     // optionally, LidarRayGen.spv. Empty means the current directory.
     std::filesystem::path ShaderDirectory;
 
