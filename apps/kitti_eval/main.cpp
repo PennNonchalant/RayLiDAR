@@ -61,6 +61,7 @@ struct Options
     std::size_t GaussianChunkSize = 0;
     bool GpuRayGen = true;
     bool PruneGaussians = true;
+    bool RouteUntrusted = false;
 };
 
 void PrintUsage(std::ostream &out)
@@ -78,7 +79,9 @@ void PrintUsage(std::ostream &out)
         << "  --gaussian-chunk-size <log2>    0 for all rays (default), positive log2 for 2^log2 rays per chunk\n"
         << "  --gaussian-prune <on|off>       drop weak/oversized splats at load time (default on)\n"
         << "  --candidate-alpha-bound <on|off> tighten using a single candidate (default on)\n"
-        << "  --prefix-alpha-bound <on|off>    tighten using a candidate prefix (default on)\n";
+        << "  --prefix-alpha-bound <on|off>    tighten using a candidate prefix (default on)\n"
+        << "  --route-untrusted <on|off>      hybrid: also send rays that hit untrusted triangles to the Gaussians"
+           " (default off)\n";
 }
 
 std::optional<Options> ParseOptions(std::span<char *> args)
@@ -160,6 +163,10 @@ std::optional<Options> ParseOptions(std::span<char *> args)
         else if (flag == "--gaussian-prune" && (value == "on" || value == "off"))
         {
             options.PruneGaussians = value == "on";
+        }
+        else if (flag == "--route-untrusted" && (value == "on" || value == "off"))
+        {
+            options.RouteUntrusted = value == "on";
         }
         else if (flag == "--candidate-alpha-bound" && (value == "on" || value == "off"))
         {
@@ -250,8 +257,13 @@ void RunEvaluation(const Options &options)
         const auto seconds = std::chrono::duration<double>(Clock::now() - trustStart).count();
         std::cout << "Untrusted triangles (> " << settings.MaxPlaneDistance << " m from the 2D Gaussian surface): "
                   << 100.0 * static_cast<double>(trust.UntrustedCount) / static_cast<double>(trust.Untrusted.size())
-                  << " % (" << trust.NoNearbySplatCount << " with no splat nearby), computed in " << seconds << " s\n";
+                  << " % (" << trust.NoNearbySplatCount << " with no splat nearby), computed in " << seconds << " s\n"
+                  << "Hybrid routes:      mesh misses" << (options.RouteUntrusted ? " + untrusted triangles" : "")
+                  << '\n';
     }
+    // Empty: the hybrid sends only mesh misses to the Gaussians.
+    const auto routedTriangles =
+        options.RouteUntrusted ? std::span<const std::uint8_t>(trust.Untrusted) : std::span<const std::uint8_t>();
 
     vulkan::VulkanContext context;
     std::cout << "Device:             " << context.PhysicalDeviceProperties().deviceName.data() << '\n';
@@ -329,7 +341,7 @@ void RunEvaluation(const Options &options)
                                   options.GaussianChunkSize);
     };
     const auto traceHybrid = [&](std::span<const rt::Ray> rays) {
-        return hybrid->Scan(*meshScene, *gaussianScene, rays, options.AlphaThreshold);
+        return hybrid->Scan(*meshScene, *gaussianScene, rays, options.AlphaThreshold, routedTriangles);
     };
 
     if (compare)
@@ -384,9 +396,9 @@ void RunEvaluation(const Options &options)
     {
         std::size_t routedRays = 0;
         runSweeps("Hybrid", "hybrid_", [&](const sim::Transform &sensorToWorld, std::span<const rt::Ray> rays) {
-            auto result = options.GpuRayGen
-                              ? hybrid->Scan(*meshScene, *gaussianScene, sensor, sensorToWorld, options.AlphaThreshold)
-                              : traceHybrid(rays);
+            auto result = options.GpuRayGen ? hybrid->Scan(*meshScene, *gaussianScene, sensor, sensorToWorld,
+                                                           options.AlphaThreshold, routedTriangles)
+                                            : traceHybrid(rays);
             routedRays += result.RaysSentToGaussian;
             return kitti::FrameScan{std::move(result.Result), std::move(result.Sources)};
         });
