@@ -101,6 +101,12 @@ set_tests_properties(lidar_trust PROPERTIES
     TIMEOUT 30
 )
 
+add_test(NAME lidar_gaussian_load COMMAND raylidar_lidar_test gaussian-load)
+
+set_tests_properties(lidar_gaussian_load PROPERTIES
+    TIMEOUT 30
+)
+
 add_test(
     NAME lidar_wall
     COMMAND raylidar_lidar_test wall "${SHADER_BINARY_DIR}/LidarTrace.spv"

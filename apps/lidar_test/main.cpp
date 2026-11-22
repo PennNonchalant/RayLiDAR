@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <span>
 #include <stdexcept>
@@ -65,6 +66,56 @@ void RunTrustTest()
     Check(trust.Untrusted[2] == 1, "Triangle with no splat nearby should be untrusted.");
     Check(trust.UntrustedCount == 2 && trust.NoNearbySplatCount == 1, "Unexpected untrusted counts.");
     std::cout << "Triangle trust test passed.\n";
+}
+
+void RunGaussianLoadTest()
+{
+    const auto path = std::filesystem::temp_directory_path() / "raylidar_gaussian_load_test.ply";
+    {
+        std::ofstream file(path, std::ios::binary);
+        Check(static_cast<bool>(file), "Failed to create the temporary Gaussian PLY.");
+
+        file << "ply\n"
+             << "format binary_little_endian 1.0\n"
+             << "element vertex 4\n"
+             << "property float x\n"
+             << "property float y\n"
+             << "property float z\n"
+             << "property float opacity\n"
+             << "property float scale_0\n"
+             << "property float scale_1\n"
+             << "property float rot_0\n"
+             << "property float rot_1\n"
+             << "property float rot_2\n"
+             << "property float rot_3\n"
+             << "end_header\n";
+
+        const auto logit = [](float value) { return std::log(value / (1.0f - value)); };
+        const std::array<std::array<float, 10>, 4> records{{
+            {0.0f, 0.0f, 0.0f, logit(0.1f), std::log(0.5f), std::log(0.5f), 1.0f, 0.0f, 0.0f, 0.0f},
+            {1.0f, 0.0f, 0.0f, logit(0.9f), std::log(2.0f), std::log(0.5f), 1.0f, 0.0f, 0.0f, 0.0f},
+            {2.0f, 0.0f, 0.0f, logit(0.25f), std::log(1.0f), std::log(0.5f), 1.0f, 0.0f, 0.0f, 0.0f},
+            {3.0f, 0.0f, 0.0f, logit(0.9f), std::log(0.1f), std::log(0.1f), 1.0f, 0.0f, 0.0f, 0.0f},
+        }};
+        for (const auto &record : records)
+        {
+            file.write(reinterpret_cast<const char *>(record.data()),
+                       static_cast<std::streamsize>(record.size() * sizeof(float)));
+        }
+    }
+
+    sim::GaussianLoadStats stats;
+    const auto pruned = sim::PlyIO::LoadGaussians(path, {0.0, 0.0, 0.0}, true, &stats);
+    Check(pruned.size() == 2, "Prune should keep the boundary and the clean splat.");
+    Check(stats.Input == 4 && stats.Kept == 2, "Unexpected input/kept counts.");
+    Check(stats.RemovedOpacity == 1, "Expected one opacity rejection.");
+    Check(stats.RemovedScale == 1, "Expected one scale rejection.");
+
+    const auto all = sim::PlyIO::LoadGaussians(path, {0.0, 0.0, 0.0}, false);
+    Check(all.size() == 4, "Prune-off should load every splat.");
+
+    std::filesystem::remove(path);
+    std::cout << "Gaussian load test passed.\n";
 }
 
 // CPU-only: ray count, unit directions, origin from the pose translation.
@@ -328,6 +379,12 @@ int main(int argc, char *argv[])
             return EXIT_SUCCESS;
         }
 
+        if (mode == "gaussian-load" && argc == 2)
+        {
+            RunGaussianLoadTest();
+            return EXIT_SUCCESS;
+        }
+
         if (mode == "raygen" && argc == 3)
         {
             RunRayGenTest(argv[2]);
@@ -348,6 +405,7 @@ int main(int argc, char *argv[])
 
         std::cerr << "Usage: raylidar_lidar_test sensor\n"
                   << "       raylidar_lidar_test trust\n"
+                  << "       raylidar_lidar_test gaussian-load\n"
                   << "       raylidar_lidar_test wall <LidarTrace.spv> [output.ply]\n"
                   << "       raylidar_lidar_test raygen <LidarRayGen.spv>\n"
                   << "       raylidar_lidar_test wall-gpu <LidarTrace.spv> <LidarRayGen.spv>\n";
