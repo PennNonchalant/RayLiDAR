@@ -60,6 +60,7 @@ struct Options
     std::uint32_t BlasGroupSizeLog2 = rt::kDefaultGaussianBlasGroupSizeLog2;
     std::size_t GaussianChunkSize = 0;
     bool GpuRayGen = true;
+    bool PruneGaussians = true;
 };
 
 void PrintUsage(std::ostream &out)
@@ -75,6 +76,7 @@ void PrintUsage(std::ostream &out)
         << "  --hit-batch-size <K>            batch size (default " << rt::kDefaultGaussianHitBatchSize << ")\n"
         << "  --gaussian-blas <log2|single>   single (default) or 0 for one BLAS, positive log2 for Morton groups\n"
         << "  --gaussian-chunk-size <log2>    0 for all rays (default), positive log2 for 2^log2 rays per chunk\n"
+        << "  --gaussian-prune <on|off>       drop weak/oversized splats at load time (default on)\n"
         << "  --candidate-alpha-bound <on|off> tighten using a single candidate (default on)\n"
         << "  --prefix-alpha-bound <on|off>    tighten using a candidate prefix (default on)\n";
 }
@@ -155,6 +157,10 @@ std::optional<Options> ParseOptions(std::span<char *> args)
             }
             options.GaussianChunkSize = log2 == 0 ? 0 : std::size_t{1} << log2;
         }
+        else if (flag == "--gaussian-prune" && (value == "on" || value == "off"))
+        {
+            options.PruneGaussians = value == "on";
+        }
         else if (flag == "--candidate-alpha-bound" && (value == "on" || value == "off"))
         {
             options.GaussianOptions.CandidateAlphaBound = value == "on";
@@ -205,9 +211,11 @@ void RunEvaluation(const Options &options)
         return std::array{pose[0][3], pose[1][3], pose[2][3]};
     }();
     const auto positions = sim::ToLocalFloat(mesh.Positions, origin);
-    const auto gaussians =
-        useGaussian ? sim::PlyIO::LoadGaussians(options.GaussianBundle / "gs" / "2dgs" / "point_cloud.ply", origin)
-                    : std::vector<rt::Gaussian>{};
+    sim::GaussianLoadStats gaussianStats;
+    const auto gaussians = useGaussian
+                               ? sim::PlyIO::LoadGaussians(options.GaussianBundle / "gs" / "2dgs" / "point_cloud.ply",
+                                                           origin, options.PruneGaussians, &gaussianStats)
+                               : std::vector<rt::Gaussian>{};
     const auto gt = sim::LoadGtRays(bundle / "gt_rays" / "gt_rays.bin", origin);
     const auto loadSeconds = std::chrono::duration<double>(Clock::now() - loadStart).count();
 
@@ -218,7 +226,16 @@ void RunEvaluation(const Options &options)
     }
     if (useGaussian)
     {
-        std::cout << "2D Gaussian: " << gaussians.size() << " splats\n";
+        std::cout << "2D Gaussian: " << gaussians.size() << " splats\n"
+                  << "Gaussian prune: " << (options.PruneGaussians ? "on" : "off")
+                  << " (opacity >= " << sim::kGaussianPruneOpacityMin
+                  << ", max_scale <= " << sim::kGaussianPruneMaxScale << ")\n";
+        if (options.PruneGaussians)
+        {
+            std::cout << "Gaussian load: input " << gaussianStats.Input << ", kept " << gaussianStats.Kept
+                      << ", removed opacity " << gaussianStats.RemovedOpacity << ", removed scale "
+                      << gaussianStats.RemovedScale << '\n';
+        }
     }
     std::cout << "Local origin (W):   " << origin[0] << ", " << origin[1] << ", " << origin[2] << '\n'
               << "Loaded in " << loadSeconds << " s\n"

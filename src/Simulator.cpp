@@ -174,7 +174,7 @@ LocalScene LoadLocalScene(const SimulatorConfig &config)
 
     if (!config.GaussianPath.empty())
     {
-        scene.Gaussians = simulation::PlyIO::LoadGaussians(config.GaussianPath, {0.0, 0.0, 0.0});
+        scene.Gaussians = simulation::PlyIO::LoadGaussians(config.GaussianPath, {0.0, 0.0, 0.0}, config.PruneGaussians);
     }
 
     if (NeedsMesh(config.Mode))

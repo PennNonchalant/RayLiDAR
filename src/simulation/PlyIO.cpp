@@ -276,7 +276,8 @@ MeshData PlyIO::LoadMesh(const std::filesystem::path &path)
     return mesh;
 }
 
-std::vector<rt::Gaussian> PlyIO::LoadGaussians(const std::filesystem::path &path, const std::array<double, 3> &origin)
+std::vector<rt::Gaussian> PlyIO::LoadGaussians(const std::filesystem::path &path, const std::array<double, 3> &origin,
+                                               bool prune, GaussianLoadStats *stats)
 {
     std::ifstream file(path, std::ios::binary);
     if (!file)
@@ -320,6 +321,12 @@ std::vector<rt::Gaussian> PlyIO::LoadGaussians(const std::filesystem::path &path
     std::vector<float> record(vertex.Properties.size());
     const auto recordSize = static_cast<std::streamsize>(record.size() * sizeof(float));
 
+    if (stats != nullptr)
+    {
+        *stats = {};
+        stats->Input = vertex.Count;
+    }
+
     std::vector<rt::Gaussian> gaussians;
     gaussians.reserve(vertex.Count);
     for (std::size_t vertexIndex = 0; vertexIndex < vertex.Count; ++vertexIndex)
@@ -340,6 +347,21 @@ std::vector<rt::Gaussian> PlyIO::LoadGaussians(const std::filesystem::path &path
         gaussian.SigmaU = std::exp(record[scaleUIndex]);
         gaussian.SigmaV = std::exp(record[scaleVIndex]);
 
+        if (prune)
+        {
+            const bool removeOpacity = gaussian.Opacity < kGaussianPruneOpacityMin;
+            const bool removeScale = std::max(gaussian.SigmaU, gaussian.SigmaV) > kGaussianPruneMaxScale;
+            if (removeOpacity || removeScale)
+            {
+                if (stats != nullptr)
+                {
+                    stats->RemovedOpacity += removeOpacity ? 1 : 0;
+                    stats->RemovedScale += removeScale ? 1 : 0;
+                }
+                continue;
+            }
+        }
+
         const double rawW = record[wIndex];
         const double rawX = record[xIndex];
         const double rawY = record[yIndex];
@@ -353,6 +375,10 @@ std::vector<rt::Gaussian> PlyIO::LoadGaussians(const std::filesystem::path &path
         gaussian.AxisU = {1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + w * z), 2.0f * (x * z - w * y)};
         gaussian.AxisV = {2.0f * (x * y - w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z + w * x)};
         gaussians.push_back(gaussian);
+        if (stats != nullptr)
+        {
+            ++stats->Kept;
+        }
     }
 
     return gaussians;

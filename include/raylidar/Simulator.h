@@ -74,6 +74,8 @@ struct SimulatorConfig
     SensorConfig Sensor;
     GaussianTraceConfig Gaussian;
 
+    bool PruneGaussians = true;
+
     // Mesh mode only: generate rays on the GPU (about 2x faster per scan) when LidarRayGen.spv is in
     // ShaderDirectory. Falls back to CPU ray generation otherwise; check Simulator::UsesGpuRayGeneration().
     bool PreferGpuRayGeneration = true;
