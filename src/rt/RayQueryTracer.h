@@ -36,12 +36,19 @@ enum class RayQueryMode
 };
 
 inline constexpr std::uint32_t kDefaultGaussianHitBatchSize = 16;
+inline constexpr float kDefaultGaussianWindowRadius = 0.4f;
+inline constexpr float kDefaultGaussianNormalAngle = 20.0f;
+inline constexpr float kDefaultGaussianPlaneTolerance = 0.03f;
 
 struct GaussianTraceOptions
 {
     std::uint32_t HitBatchSize = kDefaultGaussianHitBatchSize;
     bool CandidateAlphaBound = true;
     bool PrefixAlphaBound = true;
+    float WindowRadius = kDefaultGaussianWindowRadius;
+    float NormalAngle = kDefaultGaussianNormalAngle;
+    float PlaneTolerance = kDefaultGaussianPlaneTolerance;
+    std::uint32_t WindowBufferSizeLog2 = 0;
 };
 
 class MeshScene;

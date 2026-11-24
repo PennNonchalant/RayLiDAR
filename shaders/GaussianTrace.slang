@@ -7,6 +7,20 @@ const bool kCandidateAlphaBound = true;
 [vk::constant_id(2)]
 const bool kPrefixAlphaBound = true;
 
+[vk::constant_id(3)]
+const uint kWindowCapacity = 1u;
+
+[vk::constant_id(4)]
+const float kWindowRadius = 0.0f;
+
+[vk::constant_id(5)]
+const float kNormalCosine = 1.0f;
+
+[vk::constant_id(6)]
+const float kPlaneTolerance = 0.0f;
+
+static const bool kWeightGeometry = kWindowCapacity > 1u;
+
 struct Ray
 {
     float3 Origin;
@@ -68,6 +82,37 @@ struct GaussianCandidate
     float Alpha;
 };
 
+struct WindowCandidate
+{
+    float T;
+    float Alpha;
+    float3 Normal;
+    float NormalProjection;
+    float TotalAlpha;
+    float CompatibleAlpha;
+};
+
+bool Accumulate(float t, float alpha, inout float accumulatedAlpha, inout Hit hit)
+{
+    accumulatedAlpha += (1.0f - accumulatedAlpha) * alpha;
+    if (accumulatedAlpha >= parameters.AlphaThreshold)
+    {
+        hit.T = t;
+        hit.Valid = 1;
+        return true;
+    }
+    return false;
+}
+
+bool ConsumeWindow(WindowCandidate candidate, inout uint head, inout uint count, inout float accumulatedAlpha,
+                   inout Hit hit)
+{
+    head = (head + 1u) & (kWindowCapacity - 1u);
+    --count;
+    float alpha = candidate.Alpha == 0.0f ? 0.0f : candidate.Alpha * (candidate.CompatibleAlpha / candidate.TotalAlpha);
+    return Accumulate(candidate.T, alpha, accumulatedAlpha, hit);
+}
+
 bool IsBefore(float leftT, uint leftIndex, float rightT, uint rightIndex)
 {
     return leftT < rightT || (leftT == rightT && leftIndex < rightIndex);
@@ -125,6 +170,9 @@ void main(uint3 id : SV_DispatchThreadID)
     float accumulatedAlpha = 0.0f;
     float lastT = -1.0f;
     uint lastGaussianIndex = 0;
+    WindowCandidate window[kWindowCapacity];
+    uint windowHead = 0;
+    uint windowCount = 0;
 
     while (true)
     {
@@ -205,7 +253,7 @@ void main(uint3 id : SV_DispatchThreadID)
             }
             candidates[slot] = {t, gaussianIndex, alpha};
 
-            if (kCandidateAlphaBound &&
+            if (!kWeightGeometry && kCandidateAlphaBound &&
                 accumulatedAlpha + (1.0f - accumulatedAlpha) * alpha >= parameters.AlphaThreshold)
             {
                 batchTMax = min(batchTMax, t);
@@ -214,7 +262,7 @@ void main(uint3 id : SV_DispatchThreadID)
             {
                 batchTMax = min(batchTMax, candidates[kHitBatchSize - 1].T);
             }
-            if (kPrefixAlphaBound && candidateCount > 1u && candidateCount > previousCandidateCount &&
+            if (!kWeightGeometry && kPrefixAlphaBound && candidateCount > 1u && candidateCount > previousCandidateCount &&
                 ((candidateCount & (candidateCount - 1u)) == 0u || candidateCount == kHitBatchSize))
             {
                 batchTMax = CumulativeAlphaBound(candidates, candidateCount, accumulatedAlpha, batchTMax);
@@ -231,11 +279,49 @@ void main(uint3 id : SV_DispatchThreadID)
             }
             lastT = candidate.T;
             lastGaussianIndex = candidate.GaussianIndex;
-            accumulatedAlpha += (1.0f - accumulatedAlpha) * candidate.Alpha;
-            if (accumulatedAlpha >= parameters.AlphaThreshold)
+            if (kWeightGeometry)
             {
-                hit.T = candidate.T;
-                hit.Valid = 1;
+                while (windowCount != 0u && candidate.T - window[windowHead].T > kWindowRadius)
+                {
+                    if (ConsumeWindow(window[windowHead], windowHead, windowCount, accumulatedAlpha, hit))
+                    {
+                        hits[index] = hit;
+                        return;
+                    }
+                }
+
+                Gaussian gaussian = gaussians[candidate.GaussianIndex];
+                float3 normal = normalize(cross(gaussian.AxisU, gaussian.AxisV));
+                float normalProjection = abs(dot(normal, ray.Direction));
+                float totalAlpha = 0.0f;
+                float compatibleAlpha = 0.0f;
+                for (uint offset = 0; offset < windowCount; ++offset)
+                {
+                    uint neighborSlot = (windowHead + offset) & (kWindowCapacity - 1u);
+                    WindowCandidate neighbor = window[neighborSlot];
+                    totalAlpha += neighbor.Alpha;
+                    window[neighborSlot].TotalAlpha += candidate.Alpha;
+                    float planeDistance = (candidate.T - neighbor.T) * max(normalProjection, neighbor.NormalProjection);
+                    if (planeDistance <= kPlaneTolerance && abs(dot(normal, neighbor.Normal)) >= kNormalCosine)
+                    {
+                        compatibleAlpha += neighbor.Alpha;
+                        window[neighborSlot].CompatibleAlpha += candidate.Alpha;
+                    }
+                }
+
+                uint tail = (windowHead + windowCount) & (kWindowCapacity - 1u);
+                window[tail] = {candidate.T, candidate.Alpha, normal, normalProjection, totalAlpha + candidate.Alpha,
+                                compatibleAlpha + candidate.Alpha};
+                ++windowCount;
+                if (windowCount == kWindowCapacity &&
+                    ConsumeWindow(window[windowHead], windowHead, windowCount, accumulatedAlpha, hit))
+                {
+                    hits[index] = hit;
+                    return;
+                }
+            }
+            else if (Accumulate(candidate.T, candidate.Alpha, accumulatedAlpha, hit))
+            {
                 hits[index] = hit;
                 return;
             }
@@ -248,5 +334,12 @@ void main(uint3 id : SV_DispatchThreadID)
         desc.TMin = ResumeTMin(desc.TMin, lastT);
     }
 
+    while (kWeightGeometry && windowCount != 0u)
+    {
+        if (ConsumeWindow(window[windowHead], windowHead, windowCount, accumulatedAlpha, hit))
+        {
+            break;
+        }
+    }
     hits[index] = hit;
 }

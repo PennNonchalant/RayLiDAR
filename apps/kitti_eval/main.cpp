@@ -77,6 +77,13 @@ void PrintUsage(std::ostream &out)
         << "  --gaussian-blas <log2|single>   single (default) or 0 for one BLAS, positive log2 for Morton groups\n"
         << "  --gaussian-chunk-size <log2>    0 for all rays (default), positive log2 for 2^log2 rays per chunk\n"
         << "  --gaussian-prune <on|off>       drop weak/oversized splats at load time (default on)\n"
+        << "  --gaussian-window-radius <m>    neighborhood radius along the ray (default "
+        << rt::kDefaultGaussianWindowRadius << ")\n"
+        << "  --gaussian-normal-angle <deg>  maximum angle between unoriented normals (default "
+        << rt::kDefaultGaussianNormalAngle << ")\n"
+        << "  --gaussian-plane-tolerance <m> maximum mutual point-to-plane distance (default "
+        << rt::kDefaultGaussianPlaneTolerance << ")\n"
+        << "  --gaussian-window-buffer-size <log2>  2^log2 - 1 neighborhood slots (default 0, weighting off)\n"
         << "  --candidate-alpha-bound <on|off> tighten using a single candidate (default on)\n"
         << "  --prefix-alpha-bound <on|off>    tighten using a candidate prefix (default on)\n";
 }
@@ -161,6 +168,22 @@ std::optional<Options> ParseOptions(std::span<char *> args)
         {
             options.PruneGaussians = value == "on";
         }
+        else if (flag == "--gaussian-window-radius")
+        {
+            options.GaussianOptions.WindowRadius = std::stof(args[next + 1]);
+        }
+        else if (flag == "--gaussian-normal-angle")
+        {
+            options.GaussianOptions.NormalAngle = std::stof(args[next + 1]);
+        }
+        else if (flag == "--gaussian-plane-tolerance")
+        {
+            options.GaussianOptions.PlaneTolerance = std::stof(args[next + 1]);
+        }
+        else if (flag == "--gaussian-window-buffer-size")
+        {
+            options.GaussianOptions.WindowBufferSizeLog2 = static_cast<std::uint32_t>(std::stoul(args[next + 1]));
+        }
         else if (flag == "--candidate-alpha-bound" && (value == "on" || value == "off"))
         {
             options.GaussianOptions.CandidateAlphaBound = value == "on";
@@ -184,12 +207,20 @@ std::optional<Options> ParseOptions(std::span<char *> args)
 
 void PrintGaussianConfiguration(const rt::GaussianScene &scene, const Options &options)
 {
+    const auto &trace = options.GaussianOptions;
+    const bool weighted = trace.WindowBufferSizeLog2 > 1;
     std::cout << "Gaussian BLASes:    " << scene.BlasCount() << " (up to " << scene.GaussiansPerBatch()
               << " splats each)\n"
-              << "Gaussian trace:     K=" << options.GaussianOptions.HitBatchSize
-              << ", candidate alpha bound=" << (options.GaussianOptions.CandidateAlphaBound ? "on" : "off")
-              << ", prefix alpha bound=" << (options.GaussianOptions.PrefixAlphaBound ? "on" : "off") << '\n'
-              << "Gaussian chunk size: "
+              << "Gaussian trace:     K=" << trace.HitBatchSize
+              << ", candidate alpha bound=" << (!weighted && trace.CandidateAlphaBound ? "on" : "off")
+              << ", prefix alpha bound=" << (!weighted && trace.PrefixAlphaBound ? "on" : "off") << '\n';
+    if (weighted)
+    {
+        std::cout << "Gaussian window:    " << ((1u << trace.WindowBufferSizeLog2) - 1u)
+                  << " slots, radius=" << trace.WindowRadius << " m, normal angle=" << trace.NormalAngle
+                  << " deg, plane tolerance=" << trace.PlaneTolerance << " m\n";
+    }
+    std::cout << "Gaussian chunk size: "
               << (options.GaussianChunkSize == 0 ? "all" : std::to_string(options.GaussianChunkSize)) << '\n';
 }
 

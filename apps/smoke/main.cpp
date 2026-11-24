@@ -252,35 +252,49 @@ void RunComputeSmoke(const raylidar::vulkan::VulkanContext &context, const std::
 }
 
 void RunGaussianRayQuerySmoke(const raylidar::vulkan::VulkanContext &context, const raylidar::vulkan::Shader &shader,
-                              raylidar::rt::GaussianTraceOptions options, std::uint32_t blasGroupSizeLog2)
+                              raylidar::rt::GaussianTraceOptions options, std::uint32_t blasGroupSizeLog2,
+                              float parallelHit = 2.125f, float angledHit = 2.015625f)
 {
     std::vector<raylidar::rt::Gaussian> gaussians{
         {{0.0f, 0.0f, 2.0f}, 0.3f},  {{8.0f, 0.0f, 2.0f}, 0.3f},  {{8.125f, 0.0f, 2.0f}, 0.3f},
         {{16.0f, 0.0f, 4.0f}, 0.3f}, {{16.0f, 0.0f, 2.0f}, 0.3f}, {{24.0f, 0.0f, 2.0f}, 0.5f},
+        {{24.0f, 0.0f, 1.0f}, 0.0f}, {{40.0f, 0.0f, 2.0f}, 0.3f}, {{40.0f, 0.0f, 2.125f}, 0.3f},
+        {{40.0f, 0.0f, 4.0f}, 0.6f}, {{48.0f, 0.0f, 2.0f}, 0.3f}, {{48.0f, 0.0f, 2.015625f}, 0.3f, {0.6f, 0.0f, 0.8f}},
+        {{48.0f, 0.0f, 4.0f}, 0.6f},
     };
     for (int depth = 1; depth <= 80; ++depth)
     {
         gaussians.push_back({{32.0f, 0.0f, static_cast<float>(depth)}, 0.01f});
     }
+    for (int index = 0; index < 40; ++index)
+    {
+        gaussians.push_back({{56.0f, 0.0f, 2.0f + static_cast<float>(index) / 2048.0f}, 0.02f});
+    }
 
     constexpr float tMax = 10.0f;
     constexpr float alphaThreshold = 0.5f;
     constexpr float distanceTolerance = 1.0e-4f;
-    constexpr std::array<raylidar::rt::Ray, 6> rays{{
+    constexpr std::array<raylidar::rt::Ray, 9> rays{{
         {.Origin = {0.0f, 0.0f, 0.0f}, .TMax = tMax},
         {.Origin = {8.0625f, 0.0f, 0.0f}, .TMax = tMax},
         {.Origin = {16.0f, 0.0f, 0.0f}, .TMax = tMax},
         {.Origin = {24.0f, 0.0f, 0.0f}, .TMax = tMax},
         {.Origin = {32.0f, 0.0f, 0.0f}, .TMax = 100.0f},
         {.Origin = {32.0f, 0.0f, 0.0f}, .TMax = 64.0f},
+        {.Origin = {40.0f, 0.0f, 0.0f}, .TMax = tMax},
+        {.Origin = {48.0f, 0.0f, 0.0f}, .TMax = tMax},
+        {.Origin = {56.0f, 0.0f, 0.0f}, .TMax = tMax},
     }};
-    constexpr std::array<raylidar::rt::Hit, rays.size()> expectedHits{{
+    const std::array<raylidar::rt::Hit, rays.size()> expectedHits{{
         {tMax, 0},
         {2.0f, 1},
         {4.0f, 1},
         {2.0f, 1},
         {69.0f, 1},
         {64.0f, 0},
+        {parallelHit, 1},
+        {angledHit, 1},
+        {2.0f + 34.0f / 2048.0f, 1},
     }};
 
     raylidar::rt::GaussianScene scene(context, {.Gaussians = gaussians, .BlasGroupSizeLog2 = blasGroupSizeLog2});
@@ -372,6 +386,13 @@ int main(int argc, char *argv[])
             RunGaussianRayQuerySmoke(context, gaussianShader, {.PrefixAlphaBound = false}, 0);
             RunGaussianRayQuerySmoke(context, gaussianShader, {.CandidateAlphaBound = false, .PrefixAlphaBound = false},
                                      0);
+            RunGaussianRayQuerySmoke(context, gaussianShader, {.HitBatchSize = 1, .WindowBufferSizeLog2 = 5}, 2, 4.0f,
+                                     4.0f);
+            RunGaussianRayQuerySmoke(context, gaussianShader, {.WindowBufferSizeLog2 = 6}, 0, 4.0f, 4.0f);
+            RunGaussianRayQuerySmoke(context, gaussianShader,
+                                     {.WindowRadius = 0.0625f, .NormalAngle = 60.0f, .WindowBufferSizeLog2 = 5}, 2);
+            RunGaussianRayQuerySmoke(context, gaussianShader, {.PlaneTolerance = 0.125f, .WindowBufferSizeLog2 = 5}, 2,
+                                     2.125f, 4.0f);
         }
 
         std::cout << "Vulkan smoke completed\n";

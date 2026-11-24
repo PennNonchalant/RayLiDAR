@@ -8,6 +8,9 @@
 #include "vulkan/VulkanContext.h"
 
 #include <array>
+#include <bit>
+#include <cmath>
+#include <numbers>
 
 namespace raylidar::rt
 {
@@ -17,6 +20,10 @@ constexpr std::uint32_t kWorkgroupSize = 64;
 constexpr std::uint32_t kGaussianHitBatchSizeConstantId = 0;
 constexpr std::uint32_t kCandidateAlphaBoundConstantId = 1;
 constexpr std::uint32_t kPrefixAlphaBoundConstantId = 2;
+constexpr std::uint32_t kWindowCapacityConstantId = 3;
+constexpr std::uint32_t kWindowRadiusConstantId = 4;
+constexpr std::uint32_t kNormalCosineConstantId = 5;
+constexpr std::uint32_t kPlaneToleranceConstantId = 6;
 
 vulkan::ComputePipeline MakePipeline(const vulkan::VulkanContext &context, const vulkan::Shader &shader,
                                      RayQueryMode mode, GaussianTraceOptions gaussianOptions)
@@ -46,11 +53,22 @@ vulkan::ComputePipeline MakePipeline(const vulkan::VulkanContext &context, const
         vk::SpecializationMapEntry{kGaussianHitBatchSizeConstantId, 0, wordSize},
         vk::SpecializationMapEntry{kCandidateAlphaBoundConstantId, wordSize, sizeof(vk::Bool32)},
         vk::SpecializationMapEntry{kPrefixAlphaBoundConstantId, 2 * wordSize, sizeof(vk::Bool32)},
+        vk::SpecializationMapEntry{kWindowCapacityConstantId, 3 * wordSize, wordSize},
+        vk::SpecializationMapEntry{kWindowRadiusConstantId, 4 * wordSize, sizeof(float)},
+        vk::SpecializationMapEntry{kNormalCosineConstantId, 5 * wordSize, sizeof(float)},
+        vk::SpecializationMapEntry{kPlaneToleranceConstantId, 6 * wordSize, sizeof(float)},
     };
-    const std::array<std::uint32_t, 3> values{
+    const auto windowLog2 = gaussianOptions.WindowBufferSizeLog2;
+    const auto windowCapacity = windowLog2 == 0 ? 1u : 1u << (windowLog2 - 1u);
+    const float normalCosine = std::cos(gaussianOptions.NormalAngle * (std::numbers::pi_v<float> / 180.0f));
+    const std::array<std::uint32_t, 7> values{
         gaussianOptions.HitBatchSize,
         gaussianOptions.CandidateAlphaBound ? VK_TRUE : VK_FALSE,
         gaussianOptions.PrefixAlphaBound ? VK_TRUE : VK_FALSE,
+        windowCapacity,
+        std::bit_cast<std::uint32_t>(gaussianOptions.WindowRadius),
+        std::bit_cast<std::uint32_t>(normalCosine),
+        std::bit_cast<std::uint32_t>(gaussianOptions.PlaneTolerance),
     };
     const vk::SpecializationInfo specialization(static_cast<std::uint32_t>(entries.size()), entries.data(),
                                                 sizeof(values), values.data());
